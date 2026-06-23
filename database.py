@@ -282,7 +282,7 @@ async def sell_stock(user_id: str, ticker: str, shares: int, price: float):
 
 
         async with db.execute(
-            "SELECT last_sell FROM users WHERE user_id = ?",
+            "SELECT last_buy, last_sell FROM users WHERE user_id = ?",
             (user_id,),
         ) as cursor:
             user = await cursor.fetchone()
@@ -318,10 +318,6 @@ async def sell_stock(user_id: str, ticker: str, shares: int, price: float):
         await db.execute(
             "INSERT INTO price_history (ticker, price) VALUES (?, ?)",
             (ticker.upper(), new_price),
-        )
-        await db.execute(
-            "UPDATE users SET last_buy = ? WHERE user_id = ?",
-            (datetime.now(timezone.utc).isoformat(), user_id),
         )
 
         await db.commit()
