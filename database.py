@@ -681,7 +681,32 @@ async def get_user_items(user_id: str):
             "SELECT * FROM user_items WHERE user_id = ? ORDER BY id DESC", (user_id,)
         ) as cur:
             return await cur.fetchall()
+            
+async def remove_user_item(user_id: str, item_name: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
 
+        async with db.execute(
+            """
+            SELECT id
+            FROM user_items
+            WHERE user_id = ? AND item_name = ?
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            (user_id, item_name),
+        ) as cur:
+            item = await cur.fetchone()
+
+        if not item:
+            return False
+
+        await db.execute(
+            "DELETE FROM user_items WHERE id = ?",
+            (item["id"],)
+        )
+        await db.commit()
+        return True
 
 # ── Work & Crime ───────────────────────────────────────────────────────────────
 
