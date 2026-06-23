@@ -1561,7 +1561,33 @@ async def market_cmd(interaction: discord.Interaction):
         embed.description = "\n\n".join(lines)
         embed.set_footer(text="Use /buymarket <id> to buy  ·  /delistitem <id> to remove your listing")
     await interaction.response.send_message(embed=embed)
+    
+async def inventory_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+):
+    items = await db.get_user_items(str(interaction.user.id))
 
+    unique_items = []
+    seen = set()
+
+    for item in items:
+        name = item["item_name"]
+
+        if name in seen:
+            continue
+
+        seen.add(name)
+
+        if current.lower() in name.lower():
+            unique_items.append(
+                app_commands.Choice(
+                    name=name,
+                    value=name
+                )
+            )
+
+    return unique_items[:25]
 
 @bot.tree.command(name="listitem", description="List one of your inventory items on the community market.")
 @app_commands.describe(
