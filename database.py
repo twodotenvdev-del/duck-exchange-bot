@@ -491,6 +491,44 @@ async def delete_stock(ticker: str) -> bool:
         return True
 
 
+async def fluctuate_all_stocks() -> list[dict]:
+    """Roll an independent random price change for every stock. Returns list of {ticker, old, new, change}."""
+    import random as _r
+
+    def roll_change() -> float:
+        category = _r.choices(
+            ["zero", "small", "medium", "large", "xlarge"],
+            weights=[50, 20, 15, 10, 5],
+        )[0]
+        if category == "zero":
+            return 0.0
+        magnitude = {
+            "small":  _r.uniform(1, 100),
+            "medium": _r.uniform(100, 150),
+            "large":  _r.uniform(150, 200),
+            "xlarge": _r.uniform(200, 300),
+        }[category]
+        return round(magnitude * _r.choice([1, -1]), 2)
+
+    async with aiosqlite.connect(DB_PATH) as db_conn:
+        db_conn.row_factory = aiosqlite.Row
+        async with db_conn.execute("SELECT ticker, price FROM stocks") as cur:
+            stocks = await cur.fetchall()
+        results = []
+        for stock in stocks:
+            old_price = stock["price"]
+            change = roll_change()
+            new_price = max(0.01, round(old_price + change, 2))
+            await db_conn.execute("UPDATE stocks SET price = ? WHERE ticker = ?", (new_price, stock["ticker"]))
+            await db_conn.execute(
+                "INSERT INTO price_history (ticker, price) VALUES (?, ?)",
+                (stock["ticker"], new_price),
+            )
+            results.append({"ticker": stock["ticker"], "old": old_price, "new": new_price, "change": round(new_price - old_price, 2)})
+        await db_conn.commit()
+    return results
+
+
 async def get_owners_of_stock(ticker: str):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
