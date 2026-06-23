@@ -42,11 +42,42 @@ async def init_db():
                 recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS shop_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                price REAL NOT NULL,
+                stock INTEGER NOT NULL DEFAULT -1
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS community_listings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                seller_id TEXT NOT NULL,
+                seller_name TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                price REAL NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                item_name TEXT NOT NULL,
+                item_description TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT 'shop'
+            )
+        """)
         # Migrate existing DBs — ignore errors if column already exists
         for stmt in [
             "ALTER TABLE users ADD COLUMN bank REAL NOT NULL DEFAULT 0.0",
             "ALTER TABLE users ADD COLUMN last_claim TEXT DEFAULT NULL",
             "ALTER TABLE users ADD COLUMN last_steal TEXT DEFAULT NULL",
+            "ALTER TABLE users ADD COLUMN last_work TEXT DEFAULT NULL",
+            "ALTER TABLE users ADD COLUMN last_crime TEXT DEFAULT NULL",
         ]:
             try:
                 await db.execute(stmt)
@@ -468,3 +499,218 @@ async def get_owners_of_stock(ticker: str):
             (ticker.upper(),),
         ) as cursor:
             return await cursor.fetchall()
+
+
+# ── Admin Shop ─────────────────────────────────────────────────────────────────
+
+async def create_shop_item(name: str, description: str, price: float, stock: int = -1) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO shop_items (name, description, price, stock) VALUES (?, ?, ?, ?)",
+            (name, description, price, stock),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def get_shop_items():
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM shop_items ORDER BY price ASC") as cur:
+            return await cur.fetchall()
+
+
+async def get_shop_item(item_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM shop_items WHERE id = ?", (item_id,)) as cur:
+            return await cur.fetchone()
+
+
+async def buy_shop_item(user_id: str, item_id: int) -> str:
+    """Returns 'not_found', 'out_of_stock', 'insufficient_funds', or 'ok'."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM shop_items WHERE id = ?", (item_id,)) as cur:
+            item = await cur.fetchone()
+        if not item:
+            return "not_found"
+        if item["stock"] == 0:
+            return "out_of_stock"
+        async with db.execute("SELECT cash FROM users WHERE user_id = ?", (user_id,)) as cur:
+            user = await cur.fetchone()
+        if not user or user["cash"] < item["price"]:
+            return "insufficient_funds"
+        await db.execute("UPDATE users SET cash = cash - ? WHERE user_id = ?", (item["price"], user_id))
+        if item["stock"] > 0:
+            await db.execute("UPDATE shop_items SET stock = stock - 1 WHERE id = ?", (item_id,))
+        await db.execute(
+            "INSERT INTO user_items (user_id, item_name, item_description, source) VALUES (?, ?, ?, 'shop')",
+            (user_id, item["name"], item["description"]),
+        )
+        await db.commit()
+    return "ok"
+
+
+async def delete_shop_item(item_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT id FROM shop_items WHERE id = ?", (item_id,)) as cur:
+            if not await cur.fetchone():
+                return False
+        await db.execute("DELETE FROM shop_items WHERE id = ?", (item_id,))
+        await db.commit()
+    return True
+
+
+async def edit_shop_item(item_id: int, **kwargs) -> bool:
+    allowed = {"name", "description", "price", "stock"}
+    sets = {k: v for k, v in kwargs.items() if k in allowed}
+    if not sets:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT id FROM shop_items WHERE id = ?", (item_id,)) as cur:
+            if not await cur.fetchone():
+                return False
+        cols = ", ".join(f"{k} = ?" for k in sets)
+        await db.execute(f"UPDATE shop_items SET {cols} WHERE id = ?", (*sets.values(), item_id))
+        await db.commit()
+    return True
+
+
+# ── Community Market ───────────────────────────────────────────────────────────
+
+async def create_listing(seller_id: str, seller_name: str, name: str, description: str, price: float) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO community_listings (seller_id, seller_name, name, description, price) VALUES (?, ?, ?, ?, ?)",
+            (seller_id, seller_name, name, description, price),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def get_listings():
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM community_listings ORDER BY created_at DESC") as cur:
+            return await cur.fetchall()
+
+
+async def buy_listing(buyer_id: str, listing_id: int) -> str:
+    """Returns 'not_found', 'own_listing', 'insufficient_funds', or 'ok'."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM community_listings WHERE id = ?", (listing_id,)) as cur:
+            listing = await cur.fetchone()
+        if not listing:
+            return "not_found"
+        if listing["seller_id"] == buyer_id:
+            return "own_listing"
+        async with db.execute("SELECT cash FROM users WHERE user_id = ?", (buyer_id,)) as cur:
+            buyer = await cur.fetchone()
+        if not buyer or buyer["cash"] < listing["price"]:
+            return "insufficient_funds"
+        await db.execute("UPDATE users SET cash = cash - ? WHERE user_id = ?", (listing["price"], buyer_id))
+        await db.execute("UPDATE users SET cash = cash + ? WHERE user_id = ?", (listing["price"], listing["seller_id"]))
+        await db.execute(
+            "INSERT INTO user_items (user_id, item_name, item_description, source) VALUES (?, ?, ?, 'market')",
+            (buyer_id, listing["name"], listing["description"]),
+        )
+        await db.execute("DELETE FROM community_listings WHERE id = ?", (listing_id,))
+        await db.commit()
+    return "ok"
+
+
+async def delist_item(seller_id: str, listing_id: int) -> str:
+    """Returns 'not_found', 'not_yours', or 'ok'."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT seller_id FROM community_listings WHERE id = ?", (listing_id,)) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return "not_found"
+        if row["seller_id"] != seller_id:
+            return "not_yours"
+        await db.execute("DELETE FROM community_listings WHERE id = ?", (listing_id,))
+        await db.commit()
+    return "ok"
+
+
+async def get_user_items(user_id: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM user_items WHERE user_id = ? ORDER BY id DESC", (user_id,)
+        ) as cur:
+            return await cur.fetchall()
+
+
+# ── Work & Crime ───────────────────────────────────────────────────────────────
+
+async def do_work(user_id: str) -> dict:
+    from datetime import datetime, timedelta, timezone
+    import random as _r
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT cash, last_work FROM users WHERE user_id = ?", (user_id,)) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return {"error": "user_not_found"}
+        if row["last_work"]:
+            last = datetime.fromisoformat(row["last_work"])
+            diff = datetime.now(timezone.utc) - last
+            if diff < timedelta(minutes=3):
+                remaining = timedelta(minutes=3) - diff
+                return {"ok": False, "seconds_left": int(remaining.total_seconds())}
+        earned = round(_r.uniform(50, 200), 2)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await db.execute(
+            "UPDATE users SET cash = cash + ?, last_work = ? WHERE user_id = ?",
+            (earned, now_iso, user_id),
+        )
+        await db.commit()
+        async with db.execute("SELECT cash FROM users WHERE user_id = ?", (user_id,)) as cur:
+            updated = await cur.fetchone()
+        return {"ok": True, "earned": earned, "new_cash": updated["cash"]}
+
+
+async def do_crime(user_id: str) -> dict:
+    from datetime import datetime, timedelta, timezone
+    import random as _r
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT cash, bank, last_crime FROM users WHERE user_id = ?", (user_id,)) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return {"error": "user_not_found"}
+        if row["last_crime"]:
+            last = datetime.fromisoformat(row["last_crime"])
+            diff = datetime.now(timezone.utc) - last
+            if diff < timedelta(minutes=5):
+                remaining = timedelta(minutes=5) - diff
+                return {"ok": False, "seconds_left": int(remaining.total_seconds())}
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await db.execute("UPDATE users SET last_crime = ? WHERE user_id = ?", (now_iso, user_id))
+        if _r.random() < 0.50:
+            earned = round(_r.uniform(100, 500), 2)
+            await db.execute("UPDATE users SET cash = cash + ? WHERE user_id = ?", (earned, user_id))
+            await db.commit()
+            async with db.execute("SELECT cash FROM users WHERE user_id = ?", (user_id,)) as cur:
+                updated = await cur.fetchone()
+            return {"ok": True, "success": True, "earned": earned, "new_cash": updated["cash"]}
+        else:
+            total = row["cash"] + row["bank"]
+            penalty = round(total * 0.30, 2)
+            wallet_deduct = min(penalty, row["cash"])
+            bank_deduct = penalty - wallet_deduct
+            await db.execute(
+                "UPDATE users SET cash = cash - ?, bank = bank - ? WHERE user_id = ?",
+                (wallet_deduct, bank_deduct, user_id),
+            )
+            await db.commit()
+            async with db.execute("SELECT cash, bank FROM users WHERE user_id = ?", (user_id,)) as cur:
+                updated = await cur.fetchone()
+            return {
+                "ok": True, "success": False, "penalty": penalty,
+                "new_cash": updated["cash"], "new_bank": updated["bank"],
+            }
