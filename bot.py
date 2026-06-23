@@ -311,10 +311,10 @@ async def sell_cmd(interaction: discord.Interaction, ticker: str, amount: int):
     result = await db.sell_stock(str(interaction.user.id), ticker, amount, stock["price"])
 
     if result == "cooldown":
-    await interaction.followup.send(
-        "⏳ You must wait **2 minutes** before selling stock again."
-    )
-    return
+        await interaction.followup.send(
+            "⏳ You must wait **2 minutes** before selling stock again."
+        )
+        return
 
     if result == "insufficient_shares":
         holding = await db.get_holding(str(interaction.user.id), ticker)
