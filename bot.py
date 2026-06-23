@@ -249,7 +249,7 @@ async def buy_cmd(interaction: discord.Interaction, ticker: str, amount: int):
         return
 
     cost = amount * stock["price"]
-        result = await db.buy_stock(
+    result = await db.buy_stock(
         str(interaction.user.id),
         ticker,
         amount,
