@@ -7,7 +7,7 @@ import aiosqlite
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -59,9 +59,27 @@ class DuckExchangeBot(commands.Bot):
 
     async def on_ready(self):
         print(f"Duck Exchange is online as {self.user} (ID: {self.user.id})")
+        if not stock_fluctuation.is_running():
+            stock_fluctuation.start()
 
 
 bot = DuckExchangeBot()
+
+
+# ── Stock price fluctuation task ───────────────────────────────────────────────
+
+@tasks.loop(minutes=1)
+async def stock_fluctuation():
+    results = await db.fluctuate_all_stocks()
+    if results:
+        changed = [r for r in results if r["change"] != 0]
+        if changed:
+            lines = []
+            for r in changed:
+                arrow = "📈" if r["change"] > 0 else "📉"
+                sign = "+" if r["change"] > 0 else ""
+                lines.append(f"{arrow} **{r['ticker']}**  {fmt_money(r['old'])} → {fmt_money(r['new'])}  ({sign}{fmt_money(r['change'])})")
+            print(f"[Fluctuation] {len(changed)}/{len(results)} stocks moved")
 
 
 def is_admin(interaction: discord.Interaction) -> bool:
@@ -1468,6 +1486,60 @@ async def deleteitem_cmd(interaction: discord.Interaction, item_id: int):
         await interaction.response.send_message(f"❌ No item with ID **#{item_id}** found.", ephemeral=True)
         return
     await interaction.response.send_message(f"🗑️ Item **#{item_id}** deleted from the shop.", ephemeral=True)
+
+
+@bot.tree.command(name="edititem", description="[Admin] Edit a shop item's name, price, stock, or description.")
+@app_commands.describe(
+    item_id="Item ID to edit",
+    name="New name (leave blank to keep)",
+    price="New price (leave blank to keep)",
+    description="New description (leave blank to keep)",
+    stock="New stock amount (-1 = unlimited, leave blank to keep)",
+)
+async def edititem_cmd(
+    interaction: discord.Interaction,
+    item_id: int,
+    name: str = None,
+    price: float = None,
+    description: str = None,
+    stock: int = None,
+):
+    if not is_admin(interaction):
+        await interaction.response.send_message("❌ Admins only.", ephemeral=True)
+        return
+    updates = {}
+    if name is not None:
+        updates["name"] = name
+    if price is not None:
+        if price <= 0:
+            await interaction.response.send_message("❌ Price must be positive.", ephemeral=True)
+            return
+        updates["price"] = price
+    if description is not None:
+        updates["description"] = description
+    if stock is not None:
+        updates["stock"] = stock
+    if not updates:
+        await interaction.response.send_message("❌ Provide at least one field to update.", ephemeral=True)
+        return
+    ok = await db.edit_shop_item(item_id, **updates)
+    if not ok:
+        await interaction.response.send_message(f"❌ No item with ID **#{item_id}** found.", ephemeral=True)
+        return
+    item = await db.get_shop_item(item_id)
+    stock_str = "Unlimited" if item["stock"] == -1 else str(item["stock"])
+    embed = discord.Embed(
+        title="✏️ Item Updated",
+        color=discord.Color.gold(),
+        description=(
+            f"**[#{item['id']}] {item['name']}**\n"
+            f"{item['description']}\n\n"
+            f"Price: {fmt_money(item['price'])}  |  Stock: {stock_str}"
+        ),
+    )
+    changed = ", ".join(updates.keys())
+    embed.set_footer(text=f"Updated: {changed}")
+    await interaction.response.send_message(embed=embed)
 
 
 # ── /market ───────────────────────────────────────────────────────────────────
