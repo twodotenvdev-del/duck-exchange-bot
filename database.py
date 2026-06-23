@@ -22,7 +22,8 @@ async def init_db():
                 cash REAL NOT NULL DEFAULT 10000.0,
                 bank REAL NOT NULL DEFAULT 0.0,
                 last_claim TEXT DEFAULT NULL,
-                last_steal TEXT DEFAULT NULL
+                last_steal TEXT DEFAULT NULL,
+                last_sell TEXT DEFAULT NULL
             )
         """)
         await db.execute("""
