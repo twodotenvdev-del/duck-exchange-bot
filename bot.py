@@ -249,25 +249,27 @@ async def buy_cmd(interaction: discord.Interaction, ticker: str, amount: int):
         return
 
     cost = amount * stock["price"]
-    result = await db.buy_stock(str(interaction.user.id), ticker, amount, stock["price"])
-    
-   if result == "too_many_shares":
-    holdings = await db.get_user_holdings(str(interaction.user.id))
-    owned = sum(h["shares"] for h in holdings)
-
-    await interaction.followup.send(
-        f"❌ You can only own **30 total shares**.\n"
-        f"You currently own: **{owned}/30**\n"
-        f"Trying to buy: **{amount}**"
+        result = await db.buy_stock(
+        str(interaction.user.id),
+        ticker,
+        amount,
+        stock["price"]
     )
-    return
+
+    if result == "too_many_shares":
+        holdings = await db.get_user_holdings(str(interaction.user.id))
+        owned = sum(h["shares"] for h in holdings)
+
+        await interaction.followup.send(
+            f"❌ You can only own **30 total shares**.\n"
+            f"You currently own: **{owned}/30**\n"
+            f"Trying to buy: **{amount}**"
+        )
+        return
 
     if result == "insufficient_funds":
-        user = await db.get_user(str(interaction.user.id))
         await interaction.followup.send(
-            f"❌ You don't have enough cash.\n"
-            f"**Cost:** {fmt_money(cost)}\n"
-            f"**Your cash:** {fmt_money(user['cash'])}"
+            "❌ You don't have enough cash."
         )
         return
 
