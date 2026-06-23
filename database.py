@@ -725,7 +725,7 @@ async def do_work(user_id: str) -> dict:
             if diff < timedelta(minutes=3):
                 remaining = timedelta(minutes=3) - diff
                 return {"ok": False, "seconds_left": int(remaining.total_seconds())}
-        earned = round(_r.uniform(150, 600) 2)
+        earned = round(_r.uniform(150, 600), 2)
         now_iso = datetime.now(timezone.utc).isoformat()
         await db.execute(
             "UPDATE users SET cash = cash + ?, last_work = ? WHERE user_id = ?",
@@ -755,7 +755,7 @@ async def do_crime(user_id: str) -> dict:
         now_iso = datetime.now(timezone.utc).isoformat()
         await db.execute("UPDATE users SET last_crime = ? WHERE user_id = ?", (now_iso, user_id))
         if _r.random() < 0.50:
-            earned = round(_r.uniform(300, 1500) 2)
+            earned = round(_r.uniform(300, 1500), 2)
             await db.execute("UPDATE users SET cash = cash + ? WHERE user_id = ?", (earned, user_id))
             await db.commit()
             async with db.execute("SELECT cash FROM users WHERE user_id = ?", (user_id,)) as cur:
