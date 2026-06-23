@@ -1563,26 +1563,65 @@ async def market_cmd(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 
-@bot.tree.command(name="listitem", description="List an item for sale on the community market.")
-@app_commands.describe(name="Item name", price="Price you want", description="Item description")
-async def listitem_cmd(interaction: discord.Interaction, name: str, price: float, description: str = ""):
+@bot.tree.command(name="listitem", description="List one of your inventory items on the community market.")
+@app_commands.describe(
+    item_name="Item from your inventory",
+    price="Price you want"
+)
+@app_commands.autocomplete(item_name=inventory_autocomplete)
+async def listitem_cmd(
+    interaction: discord.Interaction,
+    item_name: str,
+    price: float,
+):
     await ensure(interaction)
+
     if price <= 0:
-        await interaction.response.send_message("❌ Price must be positive.", ephemeral=True)
+        await interaction.response.send_message(
+            "❌ Price must be positive.",
+            ephemeral=True
+        )
         return
-    listing_id = await db.create_listing(
-        str(interaction.user.id), interaction.user.display_name, name, description, price
+
+    items = await db.get_user_items(str(interaction.user.id))
+
+    owned_item = None
+
+    for item in items:
+        if item["item_name"] == item_name:
+            owned_item = item
+            break
+
+    if owned_item is None:
+        await interaction.response.send_message(
+            "❌ You do not own that item.",
+            ephemeral=True
+        )
+        return
+
+    await db.remove_user_item(
+        str(interaction.user.id),
+        item_name
     )
+
+    listing_id = await db.create_listing(
+        str(interaction.user.id),
+        interaction.user.display_name,
+        owned_item["item_name"],
+        owned_item["item_description"],
+        price
+    )
+
     embed = discord.Embed(
         title="📦 Item Listed!",
         color=discord.Color.green(),
         description=(
-            f"**{name}** listed for **{fmt_money(price)}**\n"
-            f"Listing ID: **#{listing_id}**\n\n"
-            f"Others can buy it with `/buymarket {listing_id}`.\n"
-            f"To remove it: `/delistitem {listing_id}`"
+            f"**{owned_item['item_name']}** listed for "
+            f"**{fmt_money(price)}**\n"
+            f"Listing ID: **#{listing_id}**"
         ),
     )
+
     await interaction.response.send_message(embed=embed)
 
 
