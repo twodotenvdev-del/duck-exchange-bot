@@ -319,6 +319,10 @@ async def sell_stock(user_id: str, ticker: str, shares: int, price: float):
             "INSERT INTO price_history (ticker, price) VALUES (?, ?)",
             (ticker.upper(), new_price),
         )
+        await db.execute(
+            "UPDATE users SET last_buy = ? WHERE user_id = ?",
+            (datetime.now(timezone.utc).isoformat(), user_id),
+        )
 
         await db.commit()
 
