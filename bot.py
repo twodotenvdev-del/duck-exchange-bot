@@ -1266,5 +1266,312 @@ async def blackjack_cmd(interaction: discord.Interaction, amount: float):
     await interaction.response.send_message(embed=build_bj_embed(game), view=view)
 
 
+# ── /work ─────────────────────────────────────────────────────────────────────
+
+WORK_MESSAGES = [
+    "You worked a 9-to-5 at McDonald's flipping burgers",
+    "You delivered pizzas in a thunderstorm on a bicycle",
+    "You typed 'synergy' 47 times in a pointless meeting",
+    "You fixed a printer that was never broken to begin with",
+    "You sat through a 3-hour meeting that could've been an email",
+    "You collected shopping carts at Walmart in 95° heat",
+    "You drove Uber for 8 hours and got tipped $2",
+    "You coded something that kind of works if you squint",
+    "You cleaned up after a kids' birthday party",
+    "You worked the overnight shift at a gas station",
+    "You made coffee for your boss for the 300th time this year",
+    "You fixed the WiFi by turning it off and on again",
+    "You assembled 47 IKEA chairs with no instructions",
+    "You answered 200 emails that nobody needed",
+    "You stacked shelves at 3am while someone mopped around you",
+    "You wrote a report that will never be read by anyone",
+    "You stood at a cash register for 8 hours straight",
+    "You walked someone's dog and it dragged you into a bush",
+    "You tutored a kid who already knew more than you",
+    "You sold insurance over the phone for 6 hours",
+]
+
+CRIME_SUCCESS_MESSAGES = [
+    "You robbed a pizza place and got away with the register",
+    "You pickpocketed a guy who was already pickpocketing someone else",
+    "You sold knock-off designer bags outside the mall",
+    "You hacked someone's Netflix and sold their password",
+    "You ran a pyramid scheme that somehow actually worked",
+    "You counterfeited Monopoly money and a store accepted it",
+    "You held a fake raffle and kept all the tickets",
+    "You scammed a scammer — respect",
+    "You stole copper wire from a construction site",
+    "You sold a bridge to a tourist",
+    "You forged a gift card and nobody noticed",
+    "You ran a fake 'distressed duck' charity",
+    "You plagiarized someone's NFT",
+    "You dined and dashed at a 5-star restaurant",
+    "You bootlegged a movie that was already free",
+]
+
+CRIME_FAIL_MESSAGES = [
+    "You tried to rob a bank but forgot to load the water gun 💦",
+    "You got caught shoplifting a single grape 🍇",
+    "The pizza place fought back with a rolling pin 🍕",
+    "You dropped YOUR wallet while stealing someone else's 👛",
+    "An undercover cop bought all your fake bags 👜",
+    "You tried to pickpocket a martial arts instructor 🥋",
+    "Your getaway car had a flat tire 🚗",
+    "You butt-dialed 911 mid-heist 📱",
+    "Security recognized you from last time 😬",
+    "Your mask fell off immediately 🎭",
+    "You tripped running away and went viral on TikTok 📹",
+    "The ATM fought back 🏧",
+]
+
+
+@bot.tree.command(name="work", description="Work a job and earn $50–$200 (3 min cooldown).")
+async def work_cmd(interaction: discord.Interaction):
+    await ensure(interaction)
+    result = await db.do_work(str(interaction.user.id))
+    if not result.get("ok"):
+        secs = result.get("seconds_left", 0)
+        m, s = divmod(secs, 60)
+        await interaction.response.send_message(
+            f"⏳ You're too tired to work! Rest for **{m}m {s}s**.", ephemeral=True
+        )
+        return
+    msg = random.choice(WORK_MESSAGES)
+    embed = discord.Embed(
+        title="💼 Work Complete",
+        color=discord.Color.blue(),
+        description=(
+            f"{msg} and earned **{fmt_money(result['earned'])}**!\n\n"
+            f"👛 New wallet: {fmt_money(result['new_cash'])}"
+        ),
+    )
+    embed.set_footer(text="Cooldown: 3 minutes")
+    await interaction.response.send_message(embed=embed)
+
+
+# ── /crime ────────────────────────────────────────────────────────────────────
+
+@bot.tree.command(name="crime", description="Commit a crime for $100–$500 (5 min cooldown, 50% fail = -30% wealth).")
+async def crime_cmd(interaction: discord.Interaction):
+    await ensure(interaction)
+    result = await db.do_crime(str(interaction.user.id))
+    if not result.get("ok"):
+        secs = result.get("seconds_left", 0)
+        m, s = divmod(secs, 60)
+        await interaction.response.send_message(
+            f"⏳ Laying low after last time. Try again in **{m}m {s}s**.", ephemeral=True
+        )
+        return
+    if result["success"]:
+        msg = random.choice(CRIME_SUCCESS_MESSAGES)
+        embed = discord.Embed(
+            title="🦹 Crime Successful",
+            color=discord.Color.green(),
+            description=(
+                f"{msg} and pocketed **{fmt_money(result['earned'])}**!\n\n"
+                f"👛 New wallet: {fmt_money(result['new_cash'])}"
+            ),
+        )
+    else:
+        msg = random.choice(CRIME_FAIL_MESSAGES)
+        embed = discord.Embed(
+            title="🚔 Busted!",
+            color=discord.Color.red(),
+            description=(
+                f"{msg}\n\n"
+                f"💸 You lost **{fmt_money(result['penalty'])}** (30% of your wealth) in fines!\n"
+                f"👛 Wallet: {fmt_money(result['new_cash'])}  |  🏦 Bank: {fmt_money(result['new_bank'])}"
+            ),
+        )
+    embed.set_footer(text="Cooldown: 5 minutes")
+    await interaction.response.send_message(embed=embed)
+
+
+# ── /shop ─────────────────────────────────────────────────────────────────────
+
+@bot.tree.command(name="shop", description="Browse the admin shop and buy items.")
+async def shop_cmd(interaction: discord.Interaction):
+    await ensure(interaction)
+    items = await db.get_shop_items()
+    embed = discord.Embed(title="🛒 Duck Exchange Shop", color=discord.Color.gold())
+    if not items:
+        embed.description = "The shop is empty! An admin can add items with `/createitem`."
+    else:
+        lines = []
+        for item in items:
+            stock_str = "∞" if item["stock"] == -1 else str(item["stock"])
+            lines.append(
+                f"**[#{item['id']}] {item['name']}** — {fmt_money(item['price'])}  _(stock: {stock_str})_\n"
+                f"  _{item['description']}_"
+            )
+        embed.description = "\n\n".join(lines)
+        embed.set_footer(text="Use /buyitem <id> to purchase")
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="buyitem", description="Buy an item from the admin shop.")
+@app_commands.describe(item_id="Item ID from /shop")
+async def buyitem_cmd(interaction: discord.Interaction, item_id: int):
+    await ensure(interaction)
+    result = await db.buy_shop_item(str(interaction.user.id), item_id)
+    if result == "not_found":
+        await interaction.response.send_message(f"❌ No item with ID **#{item_id}** found.", ephemeral=True)
+        return
+    if result == "out_of_stock":
+        await interaction.response.send_message("❌ That item is out of stock.", ephemeral=True)
+        return
+    if result == "insufficient_funds":
+        item = await db.get_shop_item(item_id)
+        user = await db.get_user(str(interaction.user.id))
+        await interaction.response.send_message(
+            f"❌ You need {fmt_money(item['price'])} but only have {fmt_money(user['cash'])} in your wallet.",
+            ephemeral=True,
+        )
+        return
+    item = await db.get_shop_item(item_id)
+    # item may be None now if it was last in stock, fetch before buying
+    embed = discord.Embed(
+        title="✅ Purchase Successful",
+        color=discord.Color.green(),
+        description=f"You bought an item from the shop! Check `/inventory` to see it.",
+    )
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="createitem", description="[Admin] Add an item to the shop.")
+@app_commands.describe(name="Item name", price="Price in cash", description="Item description", stock="Stock amount (-1 = unlimited)")
+async def createitem_cmd(interaction: discord.Interaction, name: str, price: float, description: str = "", stock: int = -1):
+    if not is_admin(interaction):
+        await interaction.response.send_message("❌ Admins only.", ephemeral=True)
+        return
+    if price <= 0:
+        await interaction.response.send_message("❌ Price must be positive.", ephemeral=True)
+        return
+    item_id = await db.create_shop_item(name, description, price, stock)
+    stock_str = "Unlimited" if stock == -1 else str(stock)
+    embed = discord.Embed(
+        title="✅ Item Created",
+        color=discord.Color.green(),
+        description=f"**[#{item_id}] {name}**\n{description}\n\nPrice: {fmt_money(price)}  |  Stock: {stock_str}",
+    )
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="deleteitem", description="[Admin] Remove an item from the shop.")
+@app_commands.describe(item_id="Item ID to delete")
+async def deleteitem_cmd(interaction: discord.Interaction, item_id: int):
+    if not is_admin(interaction):
+        await interaction.response.send_message("❌ Admins only.", ephemeral=True)
+        return
+    ok = await db.delete_shop_item(item_id)
+    if not ok:
+        await interaction.response.send_message(f"❌ No item with ID **#{item_id}** found.", ephemeral=True)
+        return
+    await interaction.response.send_message(f"🗑️ Item **#{item_id}** deleted from the shop.", ephemeral=True)
+
+
+# ── /market ───────────────────────────────────────────────────────────────────
+
+@bot.tree.command(name="market", description="Browse the community marketplace.")
+async def market_cmd(interaction: discord.Interaction):
+    await ensure(interaction)
+    listings = await db.get_listings()
+    embed = discord.Embed(title="🏪 Community Market", color=discord.Color.blurple())
+    if not listings:
+        embed.description = "The market is empty! Use `/listitem` to sell something."
+    else:
+        lines = []
+        for l in listings:
+            lines.append(
+                f"**[#{l['id']}] {l['name']}** — {fmt_money(l['price'])}  _(by {l['seller_name']})_\n"
+                f"  _{l['description']}_"
+            )
+        embed.description = "\n\n".join(lines)
+        embed.set_footer(text="Use /buymarket <id> to buy  ·  /delistitem <id> to remove your listing")
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="listitem", description="List an item for sale on the community market.")
+@app_commands.describe(name="Item name", price="Price you want", description="Item description")
+async def listitem_cmd(interaction: discord.Interaction, name: str, price: float, description: str = ""):
+    await ensure(interaction)
+    if price <= 0:
+        await interaction.response.send_message("❌ Price must be positive.", ephemeral=True)
+        return
+    listing_id = await db.create_listing(
+        str(interaction.user.id), interaction.user.display_name, name, description, price
+    )
+    embed = discord.Embed(
+        title="📦 Item Listed!",
+        color=discord.Color.green(),
+        description=(
+            f"**{name}** listed for **{fmt_money(price)}**\n"
+            f"Listing ID: **#{listing_id}**\n\n"
+            f"Others can buy it with `/buymarket {listing_id}`.\n"
+            f"To remove it: `/delistitem {listing_id}`"
+        ),
+    )
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="buymarket", description="Buy an item from the community market.")
+@app_commands.describe(listing_id="Listing ID from /market")
+async def buymarket_cmd(interaction: discord.Interaction, listing_id: int):
+    await ensure(interaction)
+    result = await db.buy_listing(str(interaction.user.id), listing_id)
+    if result == "not_found":
+        await interaction.response.send_message(f"❌ No listing **#{listing_id}** found — it may have already sold.", ephemeral=True)
+        return
+    if result == "own_listing":
+        await interaction.response.send_message("❌ You can't buy your own listing!", ephemeral=True)
+        return
+    if result == "insufficient_funds":
+        await interaction.response.send_message("❌ Not enough wallet cash.", ephemeral=True)
+        return
+    embed = discord.Embed(
+        title="✅ Purchase Successful!",
+        color=discord.Color.green(),
+        description=f"Item purchased from the community market! Check `/inventory` to see it.",
+    )
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="delistitem", description="Remove your listing from the community market.")
+@app_commands.describe(listing_id="Listing ID to remove")
+async def delistitem_cmd(interaction: discord.Interaction, listing_id: int):
+    await ensure(interaction)
+    result = await db.delist_item(str(interaction.user.id), listing_id)
+    if result == "not_found":
+        await interaction.response.send_message(f"❌ No listing **#{listing_id}** found.", ephemeral=True)
+        return
+    if result == "not_yours":
+        await interaction.response.send_message("❌ That's not your listing.", ephemeral=True)
+        return
+    await interaction.response.send_message(f"🗑️ Listing **#{listing_id}** removed from the market.", ephemeral=True)
+
+
+# ── /inventory ────────────────────────────────────────────────────────────────
+
+@bot.tree.command(name="inventory", description="View all items you own.")
+async def inventory_cmd(interaction: discord.Interaction):
+    await ensure(interaction)
+    items = await db.get_user_items(str(interaction.user.id))
+    embed = discord.Embed(
+        title=f"🎒 {interaction.user.display_name}'s Inventory",
+        color=discord.Color.og_blurple(),
+    )
+    if not items:
+        embed.description = "Your inventory is empty! Visit `/shop` or `/market` to buy something."
+    else:
+        lines = []
+        for it in items:
+            source_icon = "🛒" if it["source"] == "shop" else "🏪"
+            desc = f" — _{it['item_description']}_" if it["item_description"] else ""
+            lines.append(f"{source_icon} **{it['item_name']}**{desc}")
+        embed.description = "\n".join(lines)
+        embed.set_footer(text=f"{len(items)} item(s)  ·  🛒 = admin shop  ·  🏪 = market")
+    await interaction.response.send_message(embed=embed)
+
+
 if __name__ == "__main__":
     bot.run(TOKEN)
