@@ -251,7 +251,7 @@ async def buy_cmd(interaction: discord.Interaction, ticker: str, amount: int):
     cost = amount * stock["price"]
     result = await db.buy_stock(str(interaction.user.id), ticker, amount, stock["price"])
     
-    if result == "too_many_shares":
+   if result == "too_many_shares":
     holdings = await db.get_user_holdings(str(interaction.user.id))
     owned = sum(h["shares"] for h in holdings)
 
