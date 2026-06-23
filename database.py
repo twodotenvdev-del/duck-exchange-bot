@@ -253,42 +253,69 @@ async def buy_stock(user_id: str, ticker: str, shares: int, price: float):
         await db.commit()
     return new_price
 
-
 async def sell_stock(user_id: str, ticker: str, shares: int, price: float):
-    """Returns 'insufficient_shares' or new price (float)."""
+    """Returns 'insufficient_shares', 'cooldown' or new price (float)."""
+    from datetime import datetime, timedelta, timezone
+
     proceeds = shares * price
     price_delta = shares * PRICE_IMPACT_SELL
     new_price = max(round(price - price_delta, 2), 0.01)
 
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+
         async with db.execute(
             "SELECT shares FROM holdings WHERE user_id = ? AND ticker = ?",
             (user_id, ticker.upper()),
         ) as cursor:
             row = await cursor.fetchone()
+
             if not row or row["shares"] < shares:
                 return "insufficient_shares"
+
+
+        async with db.execute(
+            "SELECT last_sell FROM users WHERE user_id = ?",
+            (user_id,),
+        ) as cursor:
+            user = await cursor.fetchone()
+
+
+        if user and user["last_sell"]:
+            last = datetime.fromisoformat(user["last_sell"])
+
+            if datetime.now(timezone.utc) - last < timedelta(seconds=120):
+                return "cooldown"
+
+
+        await db.execute(
+            "UPDATE users SET last_sell = ? WHERE user_id = ?",
+            (datetime.now(timezone.utc).isoformat(), user_id),
+        )
 
         await db.execute(
             "UPDATE users SET cash = cash + ? WHERE user_id = ?",
             (proceeds, user_id),
         )
+
         await db.execute(
             "UPDATE holdings SET shares = shares - ? WHERE user_id = ? AND ticker = ?",
             (shares, user_id, ticker.upper()),
         )
+
         await db.execute(
             "UPDATE stocks SET price = ? WHERE ticker = ?",
             (new_price, ticker.upper()),
         )
+
         await db.execute(
             "INSERT INTO price_history (ticker, price) VALUES (?, ?)",
             (ticker.upper(), new_price),
         )
-        await db.commit()
-    return new_price
 
+        await db.commit()
+
+    return new_price
 
 async def get_leaderboard(limit: int = 10):
     async with aiosqlite.connect(DB_PATH) as db:
