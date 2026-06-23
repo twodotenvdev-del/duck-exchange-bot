@@ -1159,9 +1159,21 @@ class BlackjackView(discord.ui.View):
         game["net"] = net
 
         async with aiosqlite.connect(db.DB_PATH) as _db:
+            # Payout fix:
+            # Win = return bet + profit (2x bet)
+            # Lose = already lost bet, no extra deduction
+            # Push = refund bet
+
+            if game.get("outcome") in ("win", "blackjack"):
+                payout = game["bet"] * 2
+            elif game.get("outcome") == "push":
+                payout = game["bet"]
+            else:
+                payout = 0
+
             await _db.execute(
                 "UPDATE users SET cash = cash + ? WHERE user_id = ?",
-                (net, str(interaction.user.id)),
+                (payout, str(interaction.user.id)),
             )
             await _db.commit()
 
@@ -1205,6 +1217,7 @@ def build_bj_embed(game: dict, finished: bool = False) -> discord.Embed:
         value=fmt_hand(game["player"]),
         inline=False,
     )
+
     if finished:
         embed.add_field(
             name=f"Dealer's Hand ({dv})",
@@ -1219,11 +1232,18 @@ def build_bj_embed(game: dict, finished: bool = False) -> discord.Embed:
         )
 
     embed.add_field(name="Bet", value=fmt_money(game["bet"]), inline=True)
-    if finished and outcome:
-        result_str = f"+{fmt_money(net)}" if net > 0 else (f"{fmt_money(net)}" if net < 0 else "±$0.00")
-        embed.add_field(name="Result", value=result_str, inline=True)
-    return embed
 
+    if finished and outcome:
+        result_str = (
+            f"+{fmt_money(game['bet'] * 2)}"
+            if outcome in ("win", "blackjack")
+            else f"+{fmt_money(game['bet'])}"
+            if outcome == "push"
+            else f"-{fmt_money(game['bet'])}"
+        )
+        embed.add_field(name="Result", value=result_str, inline=True)
+
+    return embed
 
 @bot.tree.command(name="blackjack", description="Play blackjack against the dealer!")
 @app_commands.describe(amount="Amount to bet from your wallet")
