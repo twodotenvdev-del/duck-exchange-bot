@@ -202,8 +202,20 @@ PRICE_IMPACT_SELL = 20.0   # price decrease per share sold
 
 
 async def buy_stock(user_id: str, ticker: str, shares: int, price: float):
-    """Returns 'insufficient_funds', 'user_not_found', or new price (float)."""
+    """Returns 'insufficient_funds', 'too_many_shares', 'user_not_found', or new price (float)."""
     cost = shares * price
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        async with db.execute(
+            "SELECT COALESCE(SUM(shares), 0) AS total_shares FROM holdings WHERE user_id = ?",
+            (user_id,),
+        ) as cursor:
+            total = await cursor.fetchone()
+
+        if total["total_shares"] + shares > 30:
+            return "too_many_shares"
     price_delta = shares * PRICE_IMPACT_BUY
     new_price = round(price + price_delta, 2)
 
