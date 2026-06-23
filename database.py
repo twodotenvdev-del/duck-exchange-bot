@@ -1,5 +1,6 @@
 import aiosqlite
 import os
+from datetime import datetime, timezone
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "duck_exchange.db")
 
@@ -23,7 +24,8 @@ async def init_db():
                 bank REAL NOT NULL DEFAULT 0.0,
                 last_claim TEXT DEFAULT NULL,
                 last_steal TEXT DEFAULT NULL,
-                last_sell TEXT DEFAULT NULL
+                last_sell TEXT DEFAULT NULL,
+                last_buy TEXT DEFAULT NULL
             )
         """)
         await db.execute("""
@@ -251,6 +253,10 @@ async def buy_stock(user_id: str, ticker: str, shares: int, price: float):
             "INSERT INTO price_history (ticker, price) VALUES (?, ?)",
             (ticker.upper(), new_price),
         )
+        await db.execute(
+            "UPDATE users SET last_buy = ? WHERE user_id = ?",
+            (datetime.now(timezone.utc).isoformat(), user_id),
+        )
         await db.commit()
     return new_price
 
@@ -282,10 +288,10 @@ async def sell_stock(user_id: str, ticker: str, shares: int, price: float):
             user = await cursor.fetchone()
 
 
-        if user and user["last_sell"]:
-            last = datetime.fromisoformat(user["last_sell"])
+        if user and user["last_buy"]:
+            last_buy = datetime.fromisoformat(user["last_buy"])
 
-            if datetime.now(timezone.utc) - last < timedelta(seconds=120):
+            if datetime.now(timezone.utc) - last_buy < timedelta(seconds=120):
                 return "cooldown"
 
 
