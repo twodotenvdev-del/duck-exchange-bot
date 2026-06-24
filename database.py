@@ -714,19 +714,19 @@ async def fluctuate_all_stocks() -> list[dict]:
                     hi = lo + quarter
                     change = round(_r.uniform(lo, hi) * _r.choice([1, -1]), 2)
 
-              # ── Market risks ────────────────────────────────────────────────────
-              # 5% chance of a sudden crash (25-55% drop) — punishes AFK holding
-              crashed = False
-              if _r.random() < 0.05:
-                  crash_pct = _r.uniform(0.25, 0.55)
-                  change = -round(old_price * crash_pct, 2)
-                  crashed = True
-              elif old_price > base_p * 2.0:
-                  # Mean reversion: stocks trading at 2x+ base drift back down harder
-                  extra_down = -round(old_price * _r.uniform(0.03, 0.08), 2)
-                  change = (change + extra_down) if change != 0 else extra_down
+            # ── Market risks ──────────────────────────────────────────────
+            # 5% chance of a sudden crash (25-55% drop) — punishes AFK holding
+            crashed = False
+            if _r.random() < 0.05:
+                crash_pct = _r.uniform(0.25, 0.55)
+                change = -round(old_price * crash_pct, 2)
+                crashed = True
+            elif old_price > base_p * 2.0:
+                # Mean reversion: stocks trading at 2x+ base drift back down harder
+                extra_down = -round(old_price * _r.uniform(0.03, 0.08), 2)
+                change = (change + extra_down) if change != 0 else extra_down
 
-              new_price = max(round(old_price + change, 2), floor_price)
+            new_price = max(round(old_price + change, 2), floor_price)
             actual_change = round(new_price - old_price, 2)
 
             now_iso = now.isoformat()
