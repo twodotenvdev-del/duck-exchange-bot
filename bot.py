@@ -52,6 +52,7 @@ class DuckExchangeBot(commands.Bot):
         intents = discord.Intents.default()
         intents.message_content = True  # Required for prefix commands like ?cs
         super().__init__(command_prefix=["!", "?"], intents=intents)
+          self.remove_command("help")  # remove built-in help so we can register our own
 
     async def setup_hook(self):
         await db.init_db()
