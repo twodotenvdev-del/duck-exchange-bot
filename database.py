@@ -97,6 +97,8 @@ async def init_db():
             ("steal_fail_pct", "10"),
             ("steal_success_rate", "30"),
             ("transaction_fee_pct", "2"),
+            ("claim_reward", "100"),
+            ("claim_cooldown_secs", "60"),
         ]
         for key, val in defaults:
             await db.execute(
@@ -618,9 +620,11 @@ async def transfer_cash(sender_id: str, recipient_id: str, amount: float) -> str
     return "ok"
 
 
-async def claim_daily(user_id: str, reward: float = 500.0) -> dict:
-    """Give reward if cooldown (60s) has passed."""
+async def claim_daily(user_id: str) -> dict:
+    """Give reward if cooldown has passed. Reward and cooldown read from bot_settings."""
     from datetime import datetime, timedelta, timezone
+    reward = float(await get_bot_setting("claim_reward", "100"))
+    cooldown_secs = int(float(await get_bot_setting("claim_cooldown_secs", "60")))
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
@@ -632,9 +636,9 @@ async def claim_daily(user_id: str, reward: float = 500.0) -> dict:
         if row["last_claim"]:
             last = datetime.fromisoformat(row["last_claim"])
             diff = datetime.now(timezone.utc) - last
-            if diff < timedelta(seconds=60):
-                remaining = timedelta(seconds=60) - diff
-                return {"ok": False, "seconds_left": int(remaining.total_seconds())}
+            if diff < timedelta(seconds=cooldown_secs):
+                remaining = timedelta(seconds=cooldown_secs) - diff
+                return {"ok": False, "seconds_left": int(remaining.total_seconds()), "cooldown_secs": cooldown_secs}
         now_iso = datetime.now(timezone.utc).isoformat()
         await db.execute(
             "UPDATE users SET cash = cash + ?, last_claim = ? WHERE user_id = ?",
@@ -643,7 +647,7 @@ async def claim_daily(user_id: str, reward: float = 500.0) -> dict:
         await db.commit()
         async with db.execute("SELECT cash FROM users WHERE user_id = ?", (user_id,)) as cur:
             updated = await cur.fetchone()
-        return {"ok": True, "new_cash": updated["cash"]}
+        return {"ok": True, "new_cash": updated["cash"], "reward": reward, "cooldown_secs": cooldown_secs}
 
 
 async def delete_stock(ticker: str) -> bool:
@@ -710,7 +714,19 @@ async def fluctuate_all_stocks() -> list[dict]:
                     hi = lo + quarter
                     change = round(_r.uniform(lo, hi) * _r.choice([1, -1]), 2)
 
-            new_price = max(round(old_price + change, 2), floor_price)
+              # ── Market risks ────────────────────────────────────────────────────
+              # 5% chance of a sudden crash (25-55% drop) — punishes AFK holding
+              crashed = False
+              if _r.random() < 0.05:
+                  crash_pct = _r.uniform(0.25, 0.55)
+                  change = -round(old_price * crash_pct, 2)
+                  crashed = True
+              elif old_price > base_p * 2.0:
+                  # Mean reversion: stocks trading at 2x+ base drift back down harder
+                  extra_down = -round(old_price * _r.uniform(0.03, 0.08), 2)
+                  change = (change + extra_down) if change != 0 else extra_down
+
+              new_price = max(round(old_price + change, 2), floor_price)
             actual_change = round(new_price - old_price, 2)
 
             now_iso = now.isoformat()
@@ -727,6 +743,7 @@ async def fluctuate_all_stocks() -> list[dict]:
                 "old": old_price,
                 "new": new_price,
                 "change": actual_change,
+                "crashed": crashed,
             })
         await db_conn.commit()
     return results
