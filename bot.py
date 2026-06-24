@@ -2034,52 +2034,53 @@ async def inventory_cmd(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 
-  # ── ?cs quick-create stock ────────────────────────────────────────────────────
 
-  @bot.command(name="cs")
-  async def quick_create_stock(ctx, *, args: str = ""):
-      """Quick-create a stock: ?cs TICKER,Full Name"""
-      if not ctx.guild or not ctx.author.guild_permissions.administrator:
-          await ctx.send("❌ Only server administrators can use this command.", delete_after=8)
-          return
-      parts = args.split(",", 1)
-      if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
-          await ctx.send(
-              "❌ Usage: `?cs TICKER,Full Name`\n"
-              "Example: `?cs ARSE,Australian Research and Space Exploration`",
-              delete_after=15,
-          )
-          return
-      ticker = parts[0].strip().upper()
-      name = parts[1].strip()
-      if not ticker.isalpha() or len(ticker) > 10:
-          await ctx.send("❌ Ticker must be letters only, max 10 characters.", delete_after=8)
-          return
-      existing = await db.get_stock(ticker)
-      if existing:
-          await ctx.send(f"❌ Stock **{ticker}** already exists.", delete_after=8)
-          return
-      await db.create_stock(
-          ticker=ticker,
-          name=name,
-          price=2500.0,
-          min_change=0.0,
-          max_change=500.0,
-          fluctuation_minutes=1.5,
-      )
-      embed = discord.Embed(
-          title=f"✅ Stock Created: {ticker}",
-          color=discord.Color.green(),
-          description=(
-              f"**{name}** (`{ticker}`)\n"
-              f"💵 Starting price: **$2,500.00**\n"
-              f"📊 Change range: **$0 – $500** per tick\n"
-              f"⏱ Updates every: **1.5 minutes**"
-          ),
-      )
-      embed.set_footer(text="Use /editstock to adjust settings later.")
-      await ctx.send(embed=embed)
+# ── ?cs quick-create stock ──────────────────────────────────────────────────
 
-  
+@bot.command(name="cs")
+async def quick_create_stock(ctx, *, args: str = ""):
+    """Quick-create a stock: ?cs TICKER,Full Name"""
+    if not ctx.guild or not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Only server administrators can use this command.", delete_after=8)
+        return
+    parts = args.split(",", 1)
+    if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
+        await ctx.send(
+            "❌ Usage: `?cs TICKER,Full Name`\n"
+            "Example: `?cs ARSE,Australian Research and Space Exploration`",
+            delete_after=15,
+        )
+        return
+    ticker = parts[0].strip().upper()
+    name = parts[1].strip()
+    if not ticker.isalpha() or len(ticker) > 10:
+        await ctx.send("❌ Ticker must be letters only, max 10 characters.", delete_after=8)
+        return
+    existing = await db.get_stock(ticker)
+    if existing:
+        await ctx.send(f"❌ Stock **{ticker}** already exists.", delete_after=8)
+        return
+    await db.create_stock(
+        ticker=ticker,
+        name=name,
+        price=2500.0,
+        min_change=0.0,
+        max_change=500.0,
+        fluctuation_minutes=1.5,
+    )
+    embed = discord.Embed(
+        title=f"✅ Stock Created: {ticker}",
+        color=discord.Color.green(),
+        description=(
+            f"**{name}** (`{ticker}`)\n"
+            f"💵 Starting price: **$2,500.00**\n"
+            f"📊 Change range: **$0 – $500** per tick\n"
+            f"⏱ Updates every: **1.5 minutes**"
+        ),
+    )
+    embed.set_footer(text="Use /editstock to adjust settings later.")
+    await ctx.send(embed=embed)
+
+
 if __name__ == "__main__":
     bot.run(TOKEN)
