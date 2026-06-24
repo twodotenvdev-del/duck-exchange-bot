@@ -77,10 +77,16 @@ async def stock_fluctuation():
         if changed:
             lines = []
             for r in changed:
-                arrow = "📈" if r["change"] > 0 else "📉"
+                if r.get("crashed"):
+                    arrow = "💥"
+                elif r["change"] > 0:
+                    arrow = "📈"
+                else:
+                    arrow = "📉"
                 sign = "+" if r["change"] > 0 else ""
                 lines.append(f"{arrow} **{r['ticker']}**  {fmt_money(r['old'])} → {fmt_money(r['new'])}  ({sign}{fmt_money(r['change'])})")
-            print(f"[Fluctuation] {len(changed)}/{len(results)} stocks moved")
+            crashes = sum(1 for r in changed if r.get("crashed"))
+            print(f"[Fluctuation] {len(changed)}/{len(results)} stocks moved, {crashes} crash(es)")
 
 
 def is_admin(interaction: discord.Interaction) -> bool:
@@ -1093,7 +1099,7 @@ async def transfer_cmd(interaction: discord.Interaction, user: discord.Member, a
 
 # ── /steal ────────────────────────────────────────────────────────────────────
 
-@bot.tree.command(name="steal", description="Attempt to steal another player's wallet (30% success, 5 min cooldown).")
+@bot.tree.command(name="steal", description="Attempt to steal from another player's wallet.")
 @app_commands.describe(user="Who to steal from")
 async def steal_cmd(interaction: discord.Interaction, user: discord.Member):
     await ensure(interaction)
@@ -1147,7 +1153,7 @@ async def steal_cmd(interaction: discord.Interaction, user: discord.Member):
 
 # ── /claim ────────────────────────────────────────────────────────────────────
 
-@bot.tree.command(name="claim", description="Claim $100 every 60 seconds!")
+@bot.tree.command(name="claim", description="Claim your wallet bonus.")
 async def claim_cmd(interaction: discord.Interaction):
     await ensure(interaction)
     result = await db.claim_daily(str(interaction.user.id))
@@ -1155,16 +1161,23 @@ async def claim_cmd(interaction: discord.Interaction):
         secs = result.get("seconds_left", 0)
         m, s = divmod(secs, 60)
         time_str = f"{m}m {s}s" if m else f"{s}s"
+        cooldown = result.get("cooldown_secs", 60)
+        c_m, c_s = divmod(cooldown, 60)
+        cooldown_str = f"{c_m}m {c_s}s" if c_m else f"{c_s}s"
         await interaction.response.send_message(
             f"⏳ Already claimed! Come back in **{time_str}**.", ephemeral=True
         )
         return
+    reward = result.get("reward", 100)
+    cooldown = result.get("cooldown_secs", 60)
+    c_m, c_s = divmod(cooldown, 60)
+    cooldown_str = f"{c_m}m {c_s}s" if c_m else f"{c_s}s"
     embed = discord.Embed(
-        title="✅ Claimed $100!",
+        title=f"✅ Claimed {fmt_money(reward)}!",
         color=discord.Color.green(),
-        description=f"💵 Added **$100.00** to your wallet.\n👛 New wallet balance: {fmt_money(result['new_cash'])}",
+        description=f"💵 Added **{fmt_money(reward)}** to your wallet.\n👛 New wallet balance: {fmt_money(result['new_cash'])}",
     )
-    embed.set_footer(text="You can claim again in 60 seconds!")
+    embed.set_footer(text=f"You can claim again in {cooldown_str}!")
     await interaction.response.send_message(embed=embed)
 
 
@@ -1576,7 +1589,7 @@ async def work_cmd(interaction: discord.Interaction):
 
 # ── /crime ──────────────────────────────────────────────────────────────────────────────
 
-@bot.tree.command(name="crime", description="Commit a crime (5 min cooldown, 50% fail chance).")
+@bot.tree.command(name="crime", description="Commit a crime for a cash reward (cooldown and risk apply).")
 async def crime_cmd(interaction: discord.Interaction):
     await ensure(interaction)
     result = await db.do_crime(str(interaction.user.id))
@@ -1626,6 +1639,8 @@ VALID_CONFIG_KEYS = {
     "steal_fail_pct": "% of wealth lost on failed steal (e.g. 10 = 10%)",
     "steal_success_rate": "% chance steal succeeds (e.g. 30 = 30%)",
     "transaction_fee_pct": "% fee on stock buy/sell (e.g. 2 = 2%)",
+    "claim_reward": "Cash given per /claim (e.g. 100)",
+    "claim_cooldown_secs": "Seconds between /claim uses (e.g. 60)",
 }
 
 
