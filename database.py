@@ -1067,3 +1067,12 @@ async def do_crime(user_id: str) -> dict:
                 "ok": True, "success": False, "penalty": penalty,
                 "new_cash": updated["cash"], "new_bank": updated["bank"],
             }
+
+async def global_dep(amount: float) -> int:
+    """Add *amount* to every stock's current price (negative = decrease). Returns number of stocks updated."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE stocks SET price = MAX(0.01, price + ?)", (amount,))
+        await db.commit()
+        async with db.execute("SELECT COUNT(*) FROM stocks") as cur:
+            row = await cur.fetchone()
+            return row[0] if row else 0
