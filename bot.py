@@ -969,32 +969,32 @@ async def givecash_cmd(interaction: discord.Interaction, user: discord.Member, a
 
 
 
-  # ── /givebank ────────────────────────────────────────────────────────────────
+# ── /givebank ────────────────────────────────────────────────────────────────
 
-  @bot.tree.command(name="givebank", description="[Admin] Give bank cash to a player (goes straight to bank).")
-  @app_commands.describe(user="Target user", amount="Amount to give")
-  async def givebank_cmd(interaction: discord.Interaction, user: discord.Member, amount: float):
-      if not is_admin(interaction):
-          await interaction.response.send_message("❌ Admins only.", ephemeral=True)
-          return
-      if amount <= 0:
-          await interaction.response.send_message("❌ Amount must be positive.", ephemeral=True)
-          return
-      await db.ensure_user(str(user.id), user.display_name)
-      ok = await db.admin_give_bank(str(user.id), amount)
-      if not ok:
-          await interaction.response.send_message("❌ User not found.", ephemeral=True)
-          return
-      target = await db.get_user(str(user.id))
-      embed = discord.Embed(
-          title="🏦 Bank Cash Given",
-          color=discord.Color.green(),
-          description=f"Gave **{fmt_money(amount)}** to **{user.display_name}**'s bank.\nTheir new bank balance: {fmt_money(target['bank'])}",
-      )
-      await interaction.response.send_message(embed=embed)
+@bot.tree.command(name="givebank", description="[Admin] Give bank cash to a player (goes straight to bank).")
+@app_commands.describe(user="Target user", amount="Amount to give")
+async def givebank_cmd(interaction: discord.Interaction, user: discord.Member, amount: float):
+    if not is_admin(interaction):
+        await interaction.response.send_message("❌ Admins only.", ephemeral=True)
+        return
+    if amount <= 0:
+        await interaction.response.send_message("❌ Amount must be positive.", ephemeral=True)
+        return
+    await db.ensure_user(str(user.id), user.display_name)
+    ok = await db.admin_give_bank(str(user.id), amount)
+    if not ok:
+        await interaction.response.send_message("❌ User not found.", ephemeral=True)
+        return
+    target = await db.get_user(str(user.id))
+    embed = discord.Embed(
+        title="🏦 Bank Cash Given",
+        color=discord.Color.green(),
+        description=f"Gave **{fmt_money(amount)}** to **{user.display_name}**'s bank.\nTheir new bank balance: {fmt_money(target['bank'])}",
+    )
+    await interaction.response.send_message(embed=embed)
 
 
-  # ── /removecash ───────────────────────────────────────────────────────────────
+# ── /removecash ───────────────────────────────────────────────────────────────
 
 @bot.tree.command(name="removecash", description="[Admin] Remove wallet cash from a player.")
 @app_commands.describe(user="Target user", amount="Amount to remove")
