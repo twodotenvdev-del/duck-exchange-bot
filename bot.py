@@ -968,7 +968,33 @@ async def givecash_cmd(interaction: discord.Interaction, user: discord.Member, a
     await interaction.response.send_message(embed=embed)
 
 
-# ── /removecash ───────────────────────────────────────────────────────────────
+
+  # ── /givebank ────────────────────────────────────────────────────────────────
+
+  @bot.tree.command(name="givebank", description="[Admin] Give bank cash to a player (goes straight to bank).")
+  @app_commands.describe(user="Target user", amount="Amount to give")
+  async def givebank_cmd(interaction: discord.Interaction, user: discord.Member, amount: float):
+      if not is_admin(interaction):
+          await interaction.response.send_message("❌ Admins only.", ephemeral=True)
+          return
+      if amount <= 0:
+          await interaction.response.send_message("❌ Amount must be positive.", ephemeral=True)
+          return
+      await db.ensure_user(str(user.id), user.display_name)
+      ok = await db.admin_give_bank(str(user.id), amount)
+      if not ok:
+          await interaction.response.send_message("❌ User not found.", ephemeral=True)
+          return
+      target = await db.get_user(str(user.id))
+      embed = discord.Embed(
+          title="🏦 Bank Cash Given",
+          color=discord.Color.green(),
+          description=f"Gave **{fmt_money(amount)}** to **{user.display_name}**'s bank.\nTheir new bank balance: {fmt_money(target['bank'])}",
+      )
+      await interaction.response.send_message(embed=embed)
+
+
+  # ── /removecash ───────────────────────────────────────────────────────────────
 
 @bot.tree.command(name="removecash", description="[Admin] Remove wallet cash from a player.")
 @app_commands.describe(user="Target user", amount="Amount to remove")
@@ -2131,7 +2157,7 @@ async def prefix_balance(ctx):
 
 # ── ?deposit ──────────────────────────────────────────────────────────────────
 
-@bot.command(name="deposit")
+@bot.command(name="deposit", aliases=["dep"])
 async def prefix_deposit(ctx, amount_str: str = ""):
     if not amount_str:
         await ctx.send("❌ Usage: `?deposit <amount>` or `?deposit all`")
@@ -2160,7 +2186,7 @@ async def prefix_deposit(ctx, amount_str: str = ""):
 
 # ── ?withdraw ─────────────────────────────────────────────────────────────────
 
-@bot.command(name="withdraw")
+@bot.command(name="withdraw", aliases=["with", "wd"])
 async def prefix_withdraw(ctx, amount_str: str = ""):
     if not amount_str:
         await ctx.send("❌ Usage: `?withdraw <amount>` or `?withdraw all`")
@@ -2193,7 +2219,7 @@ async def prefix_withdraw(ctx, amount_str: str = ""):
 
 # ── ?portfolio ────────────────────────────────────────────────────────────────
 
-@bot.command(name="portfolio", aliases=["pf", "holdings"])
+@bot.command(name="portfolio", aliases=["pf", "holdings", "port"])
 async def prefix_portfolio(ctx):
     await db.ensure_user(str(ctx.author.id), ctx.author.display_name)
     user = await db.get_user(str(ctx.author.id))
@@ -2248,7 +2274,7 @@ async def prefix_leaderboard(ctx):
 
 # ── ?stocks ───────────────────────────────────────────────────────────────────
 
-@bot.command(name="stocks")
+@bot.command(name="stocks", aliases=["st"])
 async def prefix_stocks(ctx):
     rows = await db.get_all_stocks()
     if not rows:
@@ -2420,7 +2446,7 @@ async def prefix_sell(ctx, ticker: str = "", amount_str: str = ""):
 
 # ── ?chart <ticker> ───────────────────────────────────────────────────────────
 
-@bot.command(name="chart")
+@bot.command(name="chart", aliases=["ch"])
 async def prefix_chart(ctx, ticker: str = ""):
     if not ticker:
         await ctx.send("❌ Usage: `?chart <TICKER>`")
@@ -2504,7 +2530,7 @@ async def prefix_crime(ctx):
 
 # ── ?claim ────────────────────────────────────────────────────────────────────
 
-@bot.command(name="claim")
+@bot.command(name="claim", aliases=["daily"])
 async def prefix_claim(ctx):
     await db.ensure_user(str(ctx.author.id), ctx.author.display_name)
     result = await db.claim_daily(str(ctx.author.id))
@@ -2615,7 +2641,7 @@ async def prefix_blackjack(ctx, amount_str: str = ""):
 
 # ── ?roulette <bet> <amount|all> ──────────────────────────────────────────────
 
-@bot.command(name="roulette")
+@bot.command(name="roulette", aliases=["rou"])
 async def prefix_roulette(ctx, bet: str = "", amount_str: str = ""):
     if not bet or not amount_str:
         await ctx.send(
@@ -2688,7 +2714,7 @@ async def prefix_roulette(ctx, bet: str = "", amount_str: str = ""):
 
 # ── ?steal <@user> ────────────────────────────────────────────────────────────
 
-@bot.command(name="steal")
+@bot.command(name="steal", aliases=["rob"])
 async def prefix_steal(ctx, target: discord.Member = None):
     if not target:
         await ctx.send("❌ Usage: `?steal @user`")
@@ -2730,7 +2756,7 @@ async def prefix_steal(ctx, target: discord.Member = None):
 
 # ── ?transfer <@user> <amount|all> ───────────────────────────────────────────
 
-@bot.command(name="transfer")
+@bot.command(name="transfer", aliases=["tr"])
 async def prefix_transfer(ctx, target: discord.Member = None, amount_str: str = ""):
     if not target or not amount_str:
         await ctx.send("❌ Usage: `?transfer @user <amount>` or `?transfer @user all`")
@@ -2761,7 +2787,40 @@ async def prefix_transfer(ctx, target: discord.Member = None, amount_str: str = 
     await ctx.send(embed=embed)
 
 
-# ── ?marketsummary ────────────────────────────────────────────────────────────
+
+  # ── ?givebank ────────────────────────────────────────────────────────────────
+
+  @bot.command(name="givebank", aliases=["giveb", "gb"])
+  async def prefix_givebank(ctx, target: discord.Member = None, amount_str: str = ""):
+      if not ctx.guild or not ctx.author.guild_permissions.administrator:
+          await ctx.send("❌ Only server administrators can use this command.", delete_after=8)
+          return
+      if not target or not amount_str:
+          await ctx.send("❌ Usage: `?givebank @user <amount>`")
+          return
+      try:
+          amount = float(amount_str)
+      except ValueError:
+          await ctx.send("❌ Invalid amount.")
+          return
+      if amount <= 0:
+          await ctx.send("❌ Amount must be positive.")
+          return
+      await db.ensure_user(str(target.id), target.display_name)
+      ok = await db.admin_give_bank(str(target.id), amount)
+      if not ok:
+          await ctx.send("❌ User not found.")
+          return
+      user_data = await db.get_user(str(target.id))
+      embed = discord.Embed(
+          title="🏦 Bank Cash Given",
+          color=discord.Color.green(),
+          description=f"Gave **{fmt_money(amount)}** to **{target.display_name}**'s bank.\nTheir new bank balance: {fmt_money(user_data['bank'])}",
+      )
+      await ctx.send(embed=embed)
+
+
+  # ── ?marketsummary ────────────────────────────────────────────────────────────
 
 @bot.command(name="marketsummary", aliases=["ms"])
 async def prefix_marketsummary(ctx):
