@@ -162,7 +162,7 @@ async def get_all_settings() -> dict:
 async def ensure_user(user_id: str, username: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT OR IGNORE INTO users (user_id, username, cash, bank) VALUES (?, ?, ?, 0.0)",
+            "INSERT OR IGNORE INTO users (user_id, username, cash, bank) VALUES (?, ?, 0.0, ?)",
             (user_id, username, STARTING_CASH),
         )
         await db.execute(
