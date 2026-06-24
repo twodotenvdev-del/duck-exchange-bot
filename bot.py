@@ -1027,6 +1027,48 @@ async def removecash_cmd(interaction: discord.Interaction, user: discord.Member,
 
 # ── /balance ──────────────────────────────────────────────────────────────────
 
+@bot.tree.command(name="globaldep", description="[Admin] Shift ALL stock prices by a fixed amount (negative to decrease).")
+@app_commands.describe(amount="Dollar amount to add to every stock price (use negative to decrease)")
+async def globaldep_cmd(interaction: discord.Interaction, amount: float):
+    if not is_admin(interaction):
+        await interaction.response.send_message("❌ Admins only.", ephemeral=True)
+        return
+    if amount == 0:
+        await interaction.response.send_message("❌ Amount cannot be zero.", ephemeral=True)
+        return
+    count = await db.global_dep(amount)
+    direction = "U0001f4c8 increased" if amount > 0 else "U0001f4c9 decreased"
+    embed = discord.Embed(
+        title="U0001f310 Global Market Shift",
+        color=discord.Color.green() if amount > 0 else discord.Color.red(),
+        description=f"All **{count}** stocks have been {direction} by **{fmt_money(abs(amount))}**.",
+    )
+    embed.set_footer(text=f"Triggered by {interaction.user.display_name}")
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.command(name="globaldep", aliases=["gdep"])
+async def prefix_globaldep(ctx, amount: float = None):
+    if not ctx.guild or not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Only server administrators can use this command.", delete_after=8)
+        return
+    if amount is None:
+        await ctx.send("❌ Usage: ?globaldep <amount>  (negative = decrease all stocks)", delete_after=8)
+        return
+    if amount == 0:
+        await ctx.send("❌ Amount cannot be zero.", delete_after=8)
+        return
+    count = await db.global_dep(amount)
+    direction = "U0001f4c8 increased" if amount > 0 else "U0001f4c9 decreased"
+    embed = discord.Embed(
+        title="U0001f310 Global Market Shift",
+        color=discord.Color.green() if amount > 0 else discord.Color.red(),
+        description=f"All **{count}** stocks have been {direction} by **{fmt_money(abs(amount))}**.",
+    )
+    embed.set_footer(text=f"Triggered by {ctx.author.display_name}")
+    await ctx.send(embed=embed)
+
+
 @bot.tree.command(name="balance", description="Check your wallet and bank balance.")
 async def balance_cmd(interaction: discord.Interaction):
     await ensure(interaction)
