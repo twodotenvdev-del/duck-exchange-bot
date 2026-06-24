@@ -2066,104 +2066,104 @@ async def inventory_cmd(interaction: discord.Interaction):
 
 
 
-  # ── /help ────────────────────────────────────────────────────────────────────
+# ── /help ────────────────────────────────────────────────────────────────────
 
-  @bot.tree.command(name="help", description="Show all Duck Exchange commands.")
-  async def help_cmd(interaction: discord.Interaction):
-      embed = discord.Embed(
-          title="🦆 Duck Exchange — Command List",
-          color=discord.Color.yellow(),
-          description="All commands work with both `/` (slash) and `?` (prefix).",
-      )
-      embed.add_field(name="💰 Economy", inline=False, value=(
-          "`?balance` / `?bal` — Check your wallet & bank\n"
-          "`?deposit <amt|all>` / `?dep` — Move wallet → bank\n"
-          "`?withdraw <amt|all>` / `?with` / `?wd` — Move bank → wallet\n"
-          "`?portfolio` / `?port` / `?pf` — Full net worth & holdings\n"
-          "`?leaderboard` / `?lb` — Top 10 richest players\n"
-          "`?transfer @user <amt|all>` / `?tr` — Send wallet cash\n"
-      ))
-      embed.add_field(name="📈 Stocks", inline=False, value=(
-          "`?stocks` / `?st` — List all stocks & prices\n"
-          "`?stock <TICKER>` — Detailed info on one stock\n"
-          "`?buy <TICKER> <amt|all>` — Buy shares (all = spend all cash)\n"
-          "`?sell <TICKER> <amt|all>` — Sell shares (all = sell everything)\n"
-          "`?chart <TICKER>` / `?ch` — Price history chart\n"
-          "`?marketsummary` / `?ms` — Top movers (24h)\n"
-      ))
-      embed.add_field(name="🎮 Games & Earning", inline=False, value=(
-          "`?work` — Earn cash (3 min cooldown)\n"
-          "`?crime` — Risky cash grab (5 min cooldown)\n"
-          "`?claim` / `?daily` — Claim periodic bonus\n"
-          "`?flip <heads|tails> <amt|all>` — 50/50 coin flip\n"
-          "`?blackjack <amt|all>` / `?bj` — Play blackjack\n"
-          "`?roulette <bet> <amt|all>` / `?rou` — Spin the wheel\n"
-          "`?steal @user` / `?rob` — Attempt to steal a player's wallet\n"
-      ))
-      embed.add_field(name="🎒 Items", inline=False, value=(
-          "`?inventory` / `?inv` — View your items\n"
-          "`?market` — Browse community listings\n"
-      ))
-      embed.add_field(name="🔧 Admin Only", inline=False, value=(
-          "`/givecash @user <amt>` — Give wallet cash\n"
-          "`/givebank @user <amt>` / `?gb` — Give bank cash\n"
-          "`/removecash @user <amt>` — Remove cash\n"
-          "`/createstock` / `?cs TICKER,Name` — Create a stock\n"
-          "`/editstock` · `/deletestock` · `/setconfig`\n"
-      ))
-      embed.set_footer(text="For numbers: use 'all' to mean your full balance  ·  Partial ?withdraw always works")
-      await interaction.response.send_message(embed=embed)
+@bot.tree.command(name="help", description="Show all Duck Exchange commands.")
+async def help_cmd(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🦆 Duck Exchange — Command List",
+        color=discord.Color.yellow(),
+        description="All commands work with both `/` (slash) and `?` (prefix).",
+    )
+    embed.add_field(name="💰 Economy", inline=False, value=(
+        "`?balance` / `?bal` — Check your wallet & bank\n"
+        "`?deposit <amt|all>` / `?dep` — Move wallet → bank\n"
+        "`?withdraw <amt|all>` / `?with` / `?wd` — Move bank → wallet\n"
+        "`?portfolio` / `?port` / `?pf` — Full net worth & holdings\n"
+        "`?leaderboard` / `?lb` — Top 10 richest players\n"
+        "`?transfer @user <amt|all>` / `?tr` — Send wallet cash\n"
+    ))
+    embed.add_field(name="📈 Stocks", inline=False, value=(
+        "`?stocks` / `?st` — List all stocks & prices\n"
+        "`?stock <TICKER>` — Detailed info on one stock\n"
+        "`?buy <TICKER> <amt|all>` — Buy shares (all = spend all cash)\n"
+        "`?sell <TICKER> <amt|all>` — Sell shares (all = sell everything)\n"
+        "`?chart <TICKER>` / `?ch` — Price history chart\n"
+        "`?marketsummary` / `?ms` — Top movers (24h)\n"
+    ))
+    embed.add_field(name="🎮 Games & Earning", inline=False, value=(
+        "`?work` — Earn cash (3 min cooldown)\n"
+        "`?crime` — Risky cash grab (5 min cooldown)\n"
+        "`?claim` / `?daily` — Claim periodic bonus\n"
+        "`?flip <heads|tails> <amt|all>` — 50/50 coin flip\n"
+        "`?blackjack <amt|all>` / `?bj` — Play blackjack\n"
+        "`?roulette <bet> <amt|all>` / `?rou` — Spin the wheel\n"
+        "`?steal @user` / `?rob` — Attempt to steal a player's wallet\n"
+    ))
+    embed.add_field(name="🎒 Items", inline=False, value=(
+        "`?inventory` / `?inv` — View your items\n"
+        "`?market` — Browse community listings\n"
+    ))
+    embed.add_field(name="🔧 Admin Only", inline=False, value=(
+        "`/givecash @user <amt>` — Give wallet cash\n"
+        "`/givebank @user <amt>` / `?gb` — Give bank cash\n"
+        "`/removecash @user <amt>` — Remove cash\n"
+        "`/createstock` / `?cs TICKER,Name` — Create a stock\n"
+        "`/editstock` · `/deletestock` · `/setconfig`\n"
+    ))
+    embed.set_footer(text="For numbers: use 'all' to mean your full balance  ·  Partial ?withdraw always works")
+    await interaction.response.send_message(embed=embed)
 
-  
-  # ── ?help ────────────────────────────────────────────────────────────────────
 
-  @bot.command(name="help", aliases=["h", "commands", "cmds"])
-  async def prefix_help(ctx):
-      embed = discord.Embed(
-          title="🦆 Duck Exchange — Command List",
-          color=discord.Color.yellow(),
-          description="All commands work with both `/` (slash) and `?` (prefix).",
-      )
-      embed.add_field(name="💰 Economy", inline=False, value=(
-          "`?balance` / `?bal` — Check your wallet & bank\n"
-          "`?deposit <amt|all>` / `?dep` — Move wallet → bank\n"
-          "`?withdraw <amt|all>` / `?with` / `?wd` — Move bank → wallet\n"
-          "`?portfolio` / `?port` / `?pf` — Full net worth & holdings\n"
-          "`?leaderboard` / `?lb` — Top 10 richest players\n"
-          "`?transfer @user <amt|all>` / `?tr` — Send wallet cash\n"
-      ))
-      embed.add_field(name="📈 Stocks", inline=False, value=(
-          "`?stocks` / `?st` — List all stocks & prices\n"
-          "`?stock <TICKER>` — Detailed info on one stock\n"
-          "`?buy <TICKER> <amt|all>` — Buy shares (all = spend all cash)\n"
-          "`?sell <TICKER> <amt|all>` — Sell shares (all = sell everything)\n"
-          "`?chart <TICKER>` / `?ch` — Price history chart\n"
-          "`?marketsummary` / `?ms` — Top movers (24h)\n"
-      ))
-      embed.add_field(name="🎮 Games & Earning", inline=False, value=(
-          "`?work` — Earn cash (3 min cooldown)\n"
-          "`?crime` — Risky cash grab (5 min cooldown)\n"
-          "`?claim` / `?daily` — Claim periodic bonus\n"
-          "`?flip <heads|tails> <amt|all>` — 50/50 coin flip\n"
-          "`?blackjack <amt|all>` / `?bj` — Play blackjack\n"
-          "`?roulette <bet> <amt|all>` / `?rou` — Spin the wheel\n"
-          "`?steal @user` / `?rob` — Attempt to steal a player's wallet\n"
-      ))
-      embed.add_field(name="🎒 Items", inline=False, value=(
-          "`?inventory` / `?inv` — View your items\n"
-          "`?market` — Browse community listings\n"
-      ))
-      embed.add_field(name="🔧 Admin Only", inline=False, value=(
-          "`/givecash @user <amt>` — Give wallet cash\n"
-          "`?givebank @user <amt>` / `?gb` — Give bank cash\n"
-          "`/removecash @user <amt>` — Remove cash\n"
-          "`/createstock` / `?cs TICKER,Name` — Create a stock\n"
-          "`/editstock` · `/deletestock` · `/setconfig`\n"
-      ))
-      embed.set_footer(text="For numbers: use 'all' to mean your full balance  ·  Partial ?withdraw always works")
-      await ctx.send(embed=embed)
+# ── ?help ────────────────────────────────────────────────────────────────────
 
-  # ── ?cs quick-create stock ──────────────────────────────────────────────────
+@bot.command(name="help", aliases=["h", "commands", "cmds"])
+async def prefix_help(ctx):
+    embed = discord.Embed(
+        title="🦆 Duck Exchange — Command List",
+        color=discord.Color.yellow(),
+        description="All commands work with both `/` (slash) and `?` (prefix).",
+    )
+    embed.add_field(name="💰 Economy", inline=False, value=(
+        "`?balance` / `?bal` — Check your wallet & bank\n"
+        "`?deposit <amt|all>` / `?dep` — Move wallet → bank\n"
+        "`?withdraw <amt|all>` / `?with` / `?wd` — Move bank → wallet\n"
+        "`?portfolio` / `?port` / `?pf` — Full net worth & holdings\n"
+        "`?leaderboard` / `?lb` — Top 10 richest players\n"
+        "`?transfer @user <amt|all>` / `?tr` — Send wallet cash\n"
+    ))
+    embed.add_field(name="📈 Stocks", inline=False, value=(
+        "`?stocks` / `?st` — List all stocks & prices\n"
+        "`?stock <TICKER>` — Detailed info on one stock\n"
+        "`?buy <TICKER> <amt|all>` — Buy shares (all = spend all cash)\n"
+        "`?sell <TICKER> <amt|all>` — Sell shares (all = sell everything)\n"
+        "`?chart <TICKER>` / `?ch` — Price history chart\n"
+        "`?marketsummary` / `?ms` — Top movers (24h)\n"
+    ))
+    embed.add_field(name="🎮 Games & Earning", inline=False, value=(
+        "`?work` — Earn cash (3 min cooldown)\n"
+        "`?crime` — Risky cash grab (5 min cooldown)\n"
+        "`?claim` / `?daily` — Claim periodic bonus\n"
+        "`?flip <heads|tails> <amt|all>` — 50/50 coin flip\n"
+        "`?blackjack <amt|all>` / `?bj` — Play blackjack\n"
+        "`?roulette <bet> <amt|all>` / `?rou` — Spin the wheel\n"
+        "`?steal @user` / `?rob` — Attempt to steal a player's wallet\n"
+    ))
+    embed.add_field(name="🎒 Items", inline=False, value=(
+        "`?inventory` / `?inv` — View your items\n"
+        "`?market` — Browse community listings\n"
+    ))
+    embed.add_field(name="🔧 Admin Only", inline=False, value=(
+        "`/givecash @user <amt>` — Give wallet cash\n"
+        "`?givebank @user <amt>` / `?gb` — Give bank cash\n"
+        "`/removecash @user <amt>` — Remove cash\n"
+        "`/createstock` / `?cs TICKER,Name` — Create a stock\n"
+        "`/editstock` · `/deletestock` · `/setconfig`\n"
+    ))
+    embed.set_footer(text="For numbers: use 'all' to mean your full balance  ·  Partial ?withdraw always works")
+    await ctx.send(embed=embed)
+
+# ── ?cs quick-create stock ──────────────────────────────────────────────────
 
 @bot.command(name="cs")
 async def quick_create_stock(ctx, *, args: str = ""):
