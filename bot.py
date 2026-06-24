@@ -167,7 +167,7 @@ def render_chart_image(prices: list[float], ticker: str, name: str, shareholders
     arrow = "▲" if overall >= 0 else "▼"
     change_color = GREEN if overall >= 0 else RED
 
-    holder_str = f"   ·   U0001f465 {shareholders:,} shareholder{'s' if shareholders != 1 else ''}"
+    holder_str = f"   ·   👥 {shareholders:,} shareholder{'s' if shareholders != 1 else ''}"
     fig.text(
         0.5, 0.912,
         f"${prices[-1]:,.2f}   {arrow} ${abs(overall):,.2f} ({pct:+.1f}%){holder_str}",
@@ -183,6 +183,7 @@ def render_chart_image(prices: list[float], ticker: str, name: str, shareholders
     return buf
 
 
+@bot.tree.command(name="stocks", description="View all available stocks and their current prices.")
 async def stocks_cmd(interaction: discord.Interaction):
     await interaction.response.defer()
     rows = await db.get_all_stocks()
@@ -204,7 +205,6 @@ async def stocks_cmd(interaction: discord.Interaction):
 
 # ── /portfolio ────────────────────────────────────────────────────────────────
 
-@bot.tree.command(name="portfolio", description="View your cash, shares, and total net worth.")
 # ── /stock (single stock detail) ──────────────────────────────────────────────────────
 
 @bot.tree.command(name="stock", description="View detailed info about a specific stock.")
@@ -223,7 +223,7 @@ async def stock_cmd(interaction: discord.Interaction, ticker: str):
 
     if changes:
         net = sum(changes)
-        trend = "U0001f4c8 Trending Up" if net > 0 else ("U0001f4c9 Trending Down" if net < 0 else "➡️ Flat")
+        trend = "📈 Trending Up" if net > 0 else ("📉 Trending Down" if net < 0 else "➡️ Flat")
     else:
         trend = "❓ No data yet"
 
@@ -235,28 +235,28 @@ async def stock_cmd(interaction: discord.Interaction, ticker: str):
 
     if changes:
         change_str = "  ".join(
-            ("U0001f7e1 +$0.00" if c == 0 else ("U0001f7e2 +" + fmt_money(c) if c > 0 else "U0001f534 " + fmt_money(c)))
+            ("🟡 +$0.00" if c == 0 else ("🟢 +" + fmt_money(c) if c > 0 else "🔴 " + fmt_money(c)))
             for c in changes
         )
     else:
         change_str = "No history"
 
     embed = discord.Embed(
-        title=f"U0001f4ca {ticker} — {stock['name']}",
+        title=f"📊 {ticker} — {stock['name']}",
         color=discord.Color.yellow(),
     )
-    embed.add_field(name="U0001f4b5 Current Price", value=fmt_money(stock["price"]), inline=True)
-    embed.add_field(name="U0001f3c1 Base Price", value=fmt_money(base_p), inline=True)
-    embed.add_field(name="U0001f4d0 vs Base", value=f"{vs_sign}{fmt_money(vs_base)} ({vs_sign}{vs_base_pct:.1f}%)", inline=True)
-    embed.add_field(name="U0001f6e1️ Price Floor", value=fmt_money(floor), inline=True)
-    embed.add_field(name="U0001f465 Shareholders", value=str(len(owners)), inline=True)
-    embed.add_field(name="U0001f4c9 Trend", value=trend, inline=True)
+    embed.add_field(name="💵 Current Price", value=fmt_money(stock["price"]), inline=True)
+    embed.add_field(name="🏁 Base Price", value=fmt_money(base_p), inline=True)
+    embed.add_field(name="📐 vs Base", value=f"{vs_sign}{fmt_money(vs_base)} ({vs_sign}{vs_base_pct:.1f}%)", inline=True)
+    embed.add_field(name="🛡️ Price Floor", value=fmt_money(floor), inline=True)
+    embed.add_field(name="👥 Shareholders", value=str(len(owners)), inline=True)
+    embed.add_field(name="📉 Trend", value=trend, inline=True)
     embed.add_field(
         name="⚙️ Volatility",
         value=f"Change range: ${stock['min_change']:,.0f}–${stock['max_change']:,.0f}\nInterval: every **{stock['fluctuation_minutes']}** min",
         inline=False,
     )
-    embed.add_field(name="U0001f550 Last 5 Changes", value=change_str, inline=False)
+    embed.add_field(name="🕐 Last 5 Changes", value=change_str, inline=False)
     embed.set_footer(text=f"Transaction fee: {fee_pct}% on buy & sell  ·  Use /chart for price history")
     await interaction.followup.send(embed=embed)
 
@@ -277,13 +277,13 @@ async def portfolio_cmd(interaction: discord.Interaction):
     net_worth = cash + bank + holdings_value
 
     embed = discord.Embed(
-        title=f"U0001f986 {interaction.user.display_name}'s Portfolio",
+        title=f"🦆 {interaction.user.display_name}'s Portfolio",
         color=discord.Color.green(),
     )
-    embed.add_field(name="U0001f45b Wallet", value=fmt_money(cash), inline=True)
-    embed.add_field(name="U0001f3e6 Bank", value=fmt_money(bank), inline=True)
-    embed.add_field(name="U0001f4c8 Holdings Value", value=fmt_money(holdings_value), inline=True)
-    embed.add_field(name="U0001f3c6 Net Worth", value=fmt_money(net_worth), inline=True)
+    embed.add_field(name="👛 Wallet", value=fmt_money(cash), inline=True)
+    embed.add_field(name="🏦 Bank", value=fmt_money(bank), inline=True)
+    embed.add_field(name="📈 Holdings Value", value=fmt_money(holdings_value), inline=True)
+    embed.add_field(name="🏆 Net Worth", value=fmt_money(net_worth), inline=True)
 
     if holdings:
         lines = []
@@ -293,15 +293,15 @@ async def portfolio_cmd(interaction: discord.Interaction):
             pl = current_value - cost_basis
             pl_pct = (pl / cost_basis * 100) if cost_basis > 0 else 0.0
             pl_sign = "+" if pl >= 0 else ""
-            pl_emoji = "U0001f4c8" if pl >= 0 else "U0001f4c9"
+            pl_emoji = "📈" if pl >= 0 else "📉"
             lines.append(
                 f"**{h['ticker']}** ({h['name']}) — {h['shares']:,} shares\n"
                 f"  Bought @ {fmt_money(h['avg_cost'])} avg  ·  Now {fmt_money(h['price'])}\n"
                 f"  Value: {fmt_money(current_value)}  ·  P&L: {pl_emoji} {pl_sign}{fmt_money(pl)} ({pl_sign}{pl_pct:.1f}%)"
             )
-        embed.add_field(name="U0001f4ca Shares Owned", value="\n\n".join(lines), inline=False)
+        embed.add_field(name="📊 Shares Owned", value="\n\n".join(lines), inline=False)
     else:
-        embed.add_field(name="U0001f4ca Shares Owned", value="None — use `/buy` to get started!", inline=False)
+        embed.add_field(name="📊 Shares Owned", value="None — use `/buy` to get started!", inline=False)
 
     await interaction.followup.send(embed=embed)
 
@@ -350,7 +350,7 @@ async def buy_cmd(interaction: discord.Interaction, ticker: str, amount: int):
             f"**Transaction fee (2%):** -{fmt_money(fee)}\n"
             f"**Total spent:** {fmt_money(cost + fee)}\n"
             f"**Remaining cash:** {fmt_money(user['cash'])}\n"
-            f"**New market price:** U0001f4c8 {fmt_money(new_price)}"
+            f"**New market price:** 📈 {fmt_money(new_price)}"
         ),
     )
     await interaction.followup.send(embed=embed)
@@ -396,7 +396,7 @@ async def sell_cmd(interaction: discord.Interaction, ticker: str, amount: int):
             f"**Transaction fee (2%):** -{fmt_money(fee)}\n"
             f"**Net proceeds:** {fmt_money(net_proceeds)}\n"
             f"**New cash balance:** {fmt_money(user['cash'])}\n"
-            f"**New market price:** U0001f4c9 {fmt_money(new_price)}"
+            f"**New market price:** 📉 {fmt_money(new_price)}"
         ),
     )
     await interaction.followup.send(embed=embed)
@@ -416,7 +416,7 @@ async def chart_cmd(interaction: discord.Interaction, ticker: str):
     history = await db.get_price_history(ticker, limit=40)
     if len(history) < 2:
         await interaction.followup.send(
-            f"U0001f4ca **{ticker}** — {stock['name']}\n"
+            f"📊 **{ticker}** — {stock['name']}\n"
             f"Current price: {fmt_money(stock['price'])}\n\n"
             f"Not enough price history yet."
         )
@@ -468,10 +468,10 @@ async def marketsummary_cmd(interaction: discord.Interaction):
     if not rows:
         await interaction.followup.send("No stocks yet! Use `/createstock` to add one.")
         return
-    embed = discord.Embed(title="U0001f4ca Market Summary — 24h Movers", color=discord.Color.gold())
+    embed = discord.Embed(title="📊 Market Summary — 24h Movers", color=discord.Color.gold())
     lines = []
     for row in rows:
-        arrow = "U0001f4c8" if row["change"] > 0 else ("U0001f4c9" if row["change"] < 0 else "➡️")
+        arrow = "📈" if row["change"] > 0 else ("📉" if row["change"] < 0 else "➡️")
         sign = "+" if row["change"] >= 0 else ""
         lines.append(
             f"{arrow} **{row['ticker']}** — {fmt_money(row['price'])}  "
@@ -1574,11 +1574,11 @@ async def work_cmd(interaction: discord.Interaction):
     work_max = await db.get_bot_setting("work_max", "200")
     msg = random.choice(WORK_MESSAGES)
     embed = discord.Embed(
-        title="U0001f4bc Work Complete",
+        title="💼 Work Complete",
         color=discord.Color.blue(),
         description=(
             f"{msg} and earned **{fmt_money(result['earned'])}**!\n\n"
-            f"U0001f45b New wallet: {fmt_money(result['new_cash'])}"
+            f"👛 New wallet: {fmt_money(result['new_cash'])}"
         ),
     )
     embed.set_footer(text=f"Cooldown: 3 min  ·  Payout: ${work_min}–${work_max}")
@@ -1604,22 +1604,22 @@ async def crime_cmd(interaction: discord.Interaction):
     if result["success"]:
         msg = random.choice(CRIME_SUCCESS_MESSAGES)
         embed = discord.Embed(
-            title="U0001f9b9 Crime Successful",
+            title="🦹 Crime Successful",
             color=discord.Color.green(),
             description=(
                 f"{msg} and pocketed **{fmt_money(result['earned'])}**!\n\n"
-                f"U0001f45b New wallet: {fmt_money(result['new_cash'])}"
+                f"👛 New wallet: {fmt_money(result['new_cash'])}"
             ),
         )
     else:
         msg = random.choice(CRIME_FAIL_MESSAGES)
         embed = discord.Embed(
-            title="U0001f694 Busted!",
+            title="🚔 Busted!",
             color=discord.Color.red(),
             description=(
                 f"{msg}\n\n"
-                f"U0001f4b8 You lost **{fmt_money(result['penalty'])}** ({crime_fail_pct}% of your wealth) in fines!\n"
-                f"U0001f45b Wallet: {fmt_money(result['new_cash'])}  |  U0001f3e6 Bank: {fmt_money(result['new_bank'])}"
+                f"💸 You lost **{fmt_money(result['penalty'])}** ({crime_fail_pct}% of your wealth) in fines!\n"
+                f"👛 Wallet: {fmt_money(result['new_cash'])}  |  🏦 Bank: {fmt_money(result['new_bank'])}"
             ),
         )
     embed.set_footer(text=f"Cooldown: 5 min  ·  Payout: ${crime_min}–${crime_max}  ·  Fail: {crime_fail_pct}% wealth")
@@ -1800,7 +1800,7 @@ async def createitem_cmd(
             return
     item_id = await db.create_shop_item(name, description, price, stock, role_id)
     stock_str = "Unlimited" if stock == -1 else str(stock)
-    role_str = f"  ·  U0001f3ad Grants role <@&{role_id}>" if role_id else ""
+    role_str = f"  ·  🎭 Grants role <@&{role_id}>" if role_id else ""
     embed = discord.Embed(
         title="✅ Item Created",
         color=discord.Color.green(),
