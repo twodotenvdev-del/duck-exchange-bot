@@ -17,7 +17,7 @@ async def init_db():
                 base_price REAL NOT NULL DEFAULT 0.0,
                 min_change REAL NOT NULL DEFAULT 0.0,
                 max_change REAL NOT NULL DEFAULT 300.0,
-                fluctuation_minutes INTEGER NOT NULL DEFAULT 1,
+                fluctuation_minutes REAL NOT NULL DEFAULT 1.0,
                 last_fluctuated TEXT DEFAULT NULL
             )
         """)
@@ -205,7 +205,7 @@ async def create_stock(
     price: float,
     min_change: float = 0.0,
     max_change: float = 300.0,
-    fluctuation_minutes: int = 1,
+    fluctuation_minutes: float = 1.0,
 ):
     async with aiosqlite.connect(DB_PATH) as db:
         try:
