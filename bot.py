@@ -70,7 +70,6 @@ bot = DuckExchangeBot()
 
 @tasks.loop(minutes=1)
 
-@tasks.loop(minutes=1)
 async def stock_fluctuation():
     results = await db.fluctuate_all_stocks()
     if results:
