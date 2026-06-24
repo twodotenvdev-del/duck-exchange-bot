@@ -13,7 +13,12 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS stocks (
                 ticker TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
-                price REAL NOT NULL
+                price REAL NOT NULL,
+                base_price REAL NOT NULL DEFAULT 0.0,
+                min_change REAL NOT NULL DEFAULT 0.0,
+                max_change REAL NOT NULL DEFAULT 300.0,
+                fluctuation_minutes INTEGER NOT NULL DEFAULT 1,
+                last_fluctuated TEXT DEFAULT NULL
             )
         """)
         await db.execute("""
@@ -33,6 +38,7 @@ async def init_db():
                 user_id TEXT NOT NULL,
                 ticker TEXT NOT NULL,
                 shares INTEGER NOT NULL DEFAULT 0,
+                avg_cost REAL NOT NULL DEFAULT 0.0,
                 PRIMARY KEY (user_id, ticker),
                 FOREIGN KEY (ticker) REFERENCES stocks(ticker)
             )
@@ -51,7 +57,8 @@ async def init_db():
                 name TEXT NOT NULL,
                 description TEXT NOT NULL DEFAULT '',
                 price REAL NOT NULL,
-                stock INTEGER NOT NULL DEFAULT -1
+                stock INTEGER NOT NULL DEFAULT -1,
+                role_id TEXT DEFAULT NULL
             )
         """)
         await db.execute("""
@@ -74,20 +81,81 @@ async def init_db():
                 source TEXT NOT NULL DEFAULT 'shop'
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS bot_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+        # Insert default settings (ignore if already exist)
+        defaults = [
+            ("work_min", "50"),
+            ("work_max", "200"),
+            ("crime_min", "100"),
+            ("crime_max", "500"),
+            ("crime_fail_pct", "30"),
+            ("steal_fail_pct", "10"),
+            ("steal_success_rate", "30"),
+            ("transaction_fee_pct", "2"),
+        ]
+        for key, val in defaults:
+            await db.execute(
+                "INSERT OR IGNORE INTO bot_settings (key, value) VALUES (?, ?)",
+                (key, val),
+            )
         # Migrate existing DBs — ignore errors if column already exists
-        for stmt in [
+        migrations = [
             "ALTER TABLE users ADD COLUMN bank REAL NOT NULL DEFAULT 0.0",
             "ALTER TABLE users ADD COLUMN last_claim TEXT DEFAULT NULL",
             "ALTER TABLE users ADD COLUMN last_steal TEXT DEFAULT NULL",
             "ALTER TABLE users ADD COLUMN last_work TEXT DEFAULT NULL",
             "ALTER TABLE users ADD COLUMN last_crime TEXT DEFAULT NULL",
-        ]:
+            "ALTER TABLE stocks ADD COLUMN base_price REAL NOT NULL DEFAULT 0.0",
+            "ALTER TABLE stocks ADD COLUMN min_change REAL NOT NULL DEFAULT 0.0",
+            "ALTER TABLE stocks ADD COLUMN max_change REAL NOT NULL DEFAULT 300.0",
+            "ALTER TABLE stocks ADD COLUMN fluctuation_minutes INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE stocks ADD COLUMN last_fluctuated TEXT DEFAULT NULL",
+            "ALTER TABLE holdings ADD COLUMN avg_cost REAL NOT NULL DEFAULT 0.0",
+            "ALTER TABLE shop_items ADD COLUMN role_id TEXT DEFAULT NULL",
+        ]
+        for stmt in migrations:
             try:
                 await db.execute(stmt)
             except Exception:
                 pass
+        # Fix base_price for existing stocks that have 0 base_price (set = current price)
+        await db.execute("UPDATE stocks SET base_price = price WHERE base_price = 0.0")
         await db.commit()
 
+
+# ── Settings ───────────────────────────────────────────────────────────────────
+
+async def get_bot_setting(key: str, default: str = "") -> str:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT value FROM bot_settings WHERE key = ?", (key,)) as cur:
+            row = await cur.fetchone()
+        return row["value"] if row else default
+
+
+async def set_bot_setting(key: str, value: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO bot_settings (key, value) VALUES (?, ?)",
+            (key, value),
+        )
+        await db.commit()
+
+
+async def get_all_settings() -> dict:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT key, value FROM bot_settings ORDER BY key") as cur:
+            rows = await cur.fetchall()
+        return {r["key"]: r["value"] for r in rows}
+
+
+# ── Users ──────────────────────────────────────────────────────────────────────
 
 async def ensure_user(user_id: str, username: str):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -111,6 +179,8 @@ async def get_user(user_id: str):
             return await cursor.fetchone()
 
 
+# ── Stocks ─────────────────────────────────────────────────────────────────────
+
 async def get_all_stocks():
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -127,12 +197,21 @@ async def get_stock(ticker: str):
             return await cursor.fetchone()
 
 
-async def create_stock(ticker: str, name: str, price: float):
+async def create_stock(
+    ticker: str,
+    name: str,
+    price: float,
+    min_change: float = 0.0,
+    max_change: float = 300.0,
+    fluctuation_minutes: int = 1,
+):
     async with aiosqlite.connect(DB_PATH) as db:
         try:
             await db.execute(
-                "INSERT INTO stocks (ticker, name, price) VALUES (?, ?, ?)",
-                (ticker.upper(), name, price),
+                """INSERT INTO stocks
+                   (ticker, name, price, base_price, min_change, max_change, fluctuation_minutes)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (ticker.upper(), name, price, price, min_change, max_change, fluctuation_minutes),
             )
             await db.execute(
                 "INSERT INTO price_history (ticker, price) VALUES (?, ?)",
@@ -142,6 +221,25 @@ async def create_stock(ticker: str, name: str, price: float):
             return True
         except aiosqlite.IntegrityError:
             return False
+
+
+async def edit_stock(ticker: str, **kwargs) -> bool:
+    """Edit stock fields: name, min_change, max_change, fluctuation_minutes."""
+    allowed = {"name", "min_change", "max_change", "fluctuation_minutes"}
+    sets = {k: v for k, v in kwargs.items() if k in allowed}
+    if not sets:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT ticker FROM stocks WHERE ticker = ?", (ticker.upper(),)) as cur:
+            if not await cur.fetchone():
+                return False
+        cols = ", ".join(f"{k} = ?" for k in sets)
+        await db.execute(
+            f"UPDATE stocks SET {cols} WHERE ticker = ?",
+            (*sets.values(), ticker.upper()),
+        )
+        await db.commit()
+    return True
 
 
 async def set_stock_price(ticker: str, new_price: float):
@@ -189,7 +287,7 @@ async def get_user_holdings(user_id: str):
         db.row_factory = aiosqlite.Row
         async with db.execute(
             """
-            SELECT h.ticker, h.shares, s.price, s.name
+            SELECT h.ticker, h.shares, h.avg_cost, s.price, s.name
             FROM holdings h
             JOIN stocks s ON h.ticker = s.ticker
             WHERE h.user_id = ? AND h.shares > 0
@@ -205,12 +303,14 @@ PRICE_IMPACT_SELL = 20.0   # price decrease per share sold
 
 
 async def buy_stock(user_id: str, ticker: str, shares: int, price: float):
-    """Returns 'insufficient_funds', 'too_many_shares', 'user_not_found', or new price (float)."""
-    cost = shares * price
+    """Returns 'insufficient_funds', 'too_many_shares', 'user_not_found', or (new_price, fee)."""
+    fee_pct = float(await get_bot_setting("transaction_fee_pct", "2")) / 100.0
+    base_cost = shares * price
+    fee = round(base_cost * fee_pct, 2)
+    total_cost = round(base_cost + fee, 2)
 
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-
         async with db.execute(
             "SELECT COALESCE(SUM(shares), 0) AS total_shares FROM holdings WHERE user_id = ?",
             (user_id,),
@@ -219,6 +319,7 @@ async def buy_stock(user_id: str, ticker: str, shares: int, price: float):
 
         if total["total_shares"] + shares > 30:
             return "too_many_shares"
+
     price_delta = shares * PRICE_IMPACT_BUY
     new_price = round(price + price_delta, 2)
 
@@ -230,20 +331,36 @@ async def buy_stock(user_id: str, ticker: str, shares: int, price: float):
             row = await cursor.fetchone()
             if not row:
                 return "user_not_found"
-            if row["cash"] < cost:
+            if row["cash"] < total_cost:
                 return "insufficient_funds"
+
+        # Update avg_cost: weighted average
+        async with db.execute(
+            "SELECT shares, avg_cost FROM holdings WHERE user_id = ? AND ticker = ?",
+            (user_id, ticker.upper()),
+        ) as cursor:
+            existing = await cursor.fetchone()
+
+        if existing and existing["shares"] > 0:
+            old_shares = existing["shares"]
+            old_avg = existing["avg_cost"]
+            new_avg = round((old_shares * old_avg + shares * price) / (old_shares + shares), 4)
+        else:
+            new_avg = round(price, 4)
 
         await db.execute(
             "UPDATE users SET cash = cash - ? WHERE user_id = ?",
-            (cost, user_id),
+            (total_cost, user_id),
         )
         await db.execute(
             """
-            INSERT INTO holdings (user_id, ticker, shares)
-            VALUES (?, ?, ?)
-            ON CONFLICT(user_id, ticker) DO UPDATE SET shares = shares + ?
+            INSERT INTO holdings (user_id, ticker, shares, avg_cost)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, ticker) DO UPDATE SET
+                shares = shares + ?,
+                avg_cost = ?
             """,
-            (user_id, ticker.upper(), shares, shares),
+            (user_id, ticker.upper(), shares, new_avg, shares, new_avg),
         )
         await db.execute(
             "UPDATE stocks SET price = ? WHERE ticker = ?",
@@ -258,15 +375,32 @@ async def buy_stock(user_id: str, ticker: str, shares: int, price: float):
             (datetime.now(timezone.utc).isoformat(), user_id),
         )
         await db.commit()
-    return new_price
+
+    return new_price, fee
+
 
 async def sell_stock(user_id: str, ticker: str, shares: int, price: float):
-    """Returns 'insufficient_shares', 'cooldown' or new price (float)."""
+    """Returns 'insufficient_shares', 'cooldown', or (new_price, net_proceeds, fee)."""
     from datetime import datetime, timedelta, timezone
 
-    proceeds = shares * price
+    fee_pct = float(await get_bot_setting("transaction_fee_pct", "2")) / 100.0
+    gross_proceeds = shares * price
+    fee = round(gross_proceeds * fee_pct, 2)
+    net_proceeds = round(gross_proceeds - fee, 2)
+
     price_delta = shares * PRICE_IMPACT_SELL
-    new_price = max(round(price - price_delta, 2), 0.01)
+    raw_new_price = max(round(price - price_delta, 2), 0.01)
+
+    # Enforce price floor at 5% of base_price
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT base_price FROM stocks WHERE ticker = ?", (ticker.upper(),)) as cur:
+            stock_row = await cur.fetchone()
+        if stock_row and stock_row["base_price"] > 0:
+            floor = round(stock_row["base_price"] * 0.05, 2)
+            new_price = max(raw_new_price, floor, 0.01)
+        else:
+            new_price = max(raw_new_price, 0.01)
 
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -276,10 +410,8 @@ async def sell_stock(user_id: str, ticker: str, shares: int, price: float):
             (user_id, ticker.upper()),
         ) as cursor:
             row = await cursor.fetchone()
-
             if not row or row["shares"] < shares:
                 return "insufficient_shares"
-
 
         async with db.execute(
             "SELECT last_buy, last_sell FROM users WHERE user_id = ?",
@@ -287,42 +419,35 @@ async def sell_stock(user_id: str, ticker: str, shares: int, price: float):
         ) as cursor:
             user = await cursor.fetchone()
 
-
         if user and user["last_buy"]:
             last_buy = datetime.fromisoformat(user["last_buy"])
-
             if datetime.now(timezone.utc) - last_buy < timedelta(seconds=120):
                 return "cooldown"
-
 
         await db.execute(
             "UPDATE users SET last_sell = ? WHERE user_id = ?",
             (datetime.now(timezone.utc).isoformat(), user_id),
         )
-
         await db.execute(
             "UPDATE users SET cash = cash + ? WHERE user_id = ?",
-            (proceeds, user_id),
+            (net_proceeds, user_id),
         )
-
         await db.execute(
             "UPDATE holdings SET shares = shares - ? WHERE user_id = ? AND ticker = ?",
             (shares, user_id, ticker.upper()),
         )
-
         await db.execute(
             "UPDATE stocks SET price = ? WHERE ticker = ?",
             (new_price, ticker.upper()),
         )
-
         await db.execute(
             "INSERT INTO price_history (ticker, price) VALUES (?, ?)",
             (ticker.upper(), new_price),
         )
-
         await db.commit()
 
-    return new_price
+    return new_price, net_proceeds, fee
+
 
 async def get_leaderboard(limit: int = 10):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -382,14 +507,13 @@ async def withdraw(user_id: str, amount: float) -> str:
 
 
 async def steal_wallet(thief_id: str, target_id: str) -> dict:
-    """
-    30% chance: thief steals ALL of target's wallet (cash).
-    70% chance: thief loses 10% of total wealth (cash + bank).
-    Returns dict with keys: success, stolen, penalty, thief_new_cash, thief_new_bank, target_new_cash
-    Also checks/sets last_steal cooldown (5 min).
-    """
+    """Attempt theft with configurable success rate and penalties."""
     import random as _rng
     from datetime import datetime, timedelta, timezone
+
+    success_rate = float(await get_bot_setting("steal_success_rate", "30")) / 100.0
+    fail_pct = float(await get_bot_setting("steal_fail_pct", "10")) / 100.0
+
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
@@ -404,7 +528,6 @@ async def steal_wallet(thief_id: str, target_id: str) -> dict:
         if not thief or not target:
             return {"error": "user_not_found"}
 
-        # Cooldown check (5 minutes)
         if thief["last_steal"]:
             last = datetime.fromisoformat(thief["last_steal"])
             if datetime.now(timezone.utc) - last < timedelta(minutes=5):
@@ -416,7 +539,7 @@ async def steal_wallet(thief_id: str, target_id: str) -> dict:
             "UPDATE users SET last_steal = ? WHERE user_id = ?", (now_iso, thief_id)
         )
 
-        if _rng.random() < 0.30:
+        if _rng.random() < success_rate:
             stolen = target["cash"]
             await db.execute("UPDATE users SET cash = 0 WHERE user_id = ?", (target_id,))
             await db.execute(
@@ -432,8 +555,7 @@ async def steal_wallet(thief_id: str, target_id: str) -> dict:
             }
         else:
             total = thief["cash"] + thief["bank"]
-            penalty = round(total * 0.10, 2)
-            # Deduct penalty from wallet first, then bank if needed
+            penalty = round(total * fail_pct, 2)
             wallet_deduct = min(penalty, thief["cash"])
             bank_deduct = penalty - wallet_deduct
             await db.execute(
@@ -497,7 +619,7 @@ async def transfer_cash(sender_id: str, recipient_id: str, amount: float) -> str
 
 
 async def claim_daily(user_id: str, reward: float = 500.0) -> dict:
-    """Give reward if cooldown (60s) has passed. Returns dict with ok/seconds_left."""
+    """Give reward if cooldown (60s) has passed."""
     from datetime import datetime, timedelta, timezone
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -538,41 +660,120 @@ async def delete_stock(ticker: str) -> bool:
 
 
 async def fluctuate_all_stocks() -> list[dict]:
-    """Roll an independent random price change for every stock. Returns list of {ticker, old, new, change}."""
+    """Roll price changes for each stock, respecting per-stock intervals."""
     import random as _r
+    from datetime import datetime, timedelta, timezone
 
-    def roll_change() -> float:
-        category = _r.choices(
-            ["zero", "small", "medium", "large", "xlarge"],
-            weights=[50, 20, 15, 10, 5],
-        )[0]
-        if category == "zero":
-            return 0.0
-        magnitude = {
-            "small":  _r.uniform(1, 100),
-            "medium": _r.uniform(100, 150),
-            "large":  _r.uniform(150, 200),
-            "xlarge": _r.uniform(200, 300),
-        }[category]
-        return round(magnitude * _r.choice([1, -1]), 2)
+    now = datetime.now(timezone.utc)
 
     async with aiosqlite.connect(DB_PATH) as db_conn:
         db_conn.row_factory = aiosqlite.Row
-        async with db_conn.execute("SELECT ticker, price FROM stocks") as cur:
+        async with db_conn.execute(
+            "SELECT ticker, price, base_price, min_change, max_change, fluctuation_minutes, last_fluctuated FROM stocks"
+        ) as cur:
             stocks = await cur.fetchall()
+
         results = []
         for stock in stocks:
+            # Check per-stock interval
+            interval = stock["fluctuation_minutes"]
+            if stock["last_fluctuated"]:
+                last_fluct = datetime.fromisoformat(stock["last_fluctuated"])
+                if now - last_fluct < timedelta(minutes=interval):
+                    continue  # Not time yet for this stock
+
             old_price = stock["price"]
-            change = roll_change()
-            new_price = max(0.01, round(old_price + change, 2))
-            await db_conn.execute("UPDATE stocks SET price = ? WHERE ticker = ?", (new_price, stock["ticker"]))
+            min_c = stock["min_change"]
+            max_c = stock["max_change"]
+            base_p = stock["base_price"] if stock["base_price"] > 0 else old_price
+            floor_price = max(round(base_p * 0.05, 2), 0.01)
+
+            magnitude = max_c - min_c
+            if magnitude <= 0:
+                change = 0.0
+            else:
+                category = _r.choices(
+                    ["zero", "small", "medium", "large", "xlarge"],
+                    weights=[50, 20, 15, 10, 5],
+                )[0]
+                if category == "zero":
+                    change = 0.0
+                else:
+                    quarter = magnitude / 4
+                    band_starts = {
+                        "small":  min_c,
+                        "medium": min_c + quarter,
+                        "large":  min_c + 2 * quarter,
+                        "xlarge": min_c + 3 * quarter,
+                    }
+                    lo = band_starts[category]
+                    hi = lo + quarter
+                    change = round(_r.uniform(lo, hi) * _r.choice([1, -1]), 2)
+
+            new_price = max(round(old_price + change, 2), floor_price)
+            actual_change = round(new_price - old_price, 2)
+
+            now_iso = now.isoformat()
+            await db_conn.execute(
+                "UPDATE stocks SET price = ?, last_fluctuated = ? WHERE ticker = ?",
+                (new_price, now_iso, stock["ticker"]),
+            )
             await db_conn.execute(
                 "INSERT INTO price_history (ticker, price) VALUES (?, ?)",
                 (stock["ticker"], new_price),
             )
-            results.append({"ticker": stock["ticker"], "old": old_price, "new": new_price, "change": round(new_price - old_price, 2)})
+            results.append({
+                "ticker": stock["ticker"],
+                "old": old_price,
+                "new": new_price,
+                "change": actual_change,
+            })
         await db_conn.commit()
     return results
+
+
+async def get_recent_price_changes(ticker: str, count: int = 5) -> list[float]:
+    """Get the last N price deltas for trend analysis."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT price FROM price_history WHERE ticker = ? ORDER BY id DESC LIMIT ?",
+            (ticker.upper(), count + 1),
+        ) as cur:
+            rows = await cur.fetchall()
+    prices = [r["price"] for r in reversed(rows)]
+    if len(prices) < 2:
+        return []
+    return [round(prices[i] - prices[i - 1], 2) for i in range(1, len(prices))]
+
+
+async def get_market_summary() -> list[dict]:
+    """Return all stocks with their price change over recent history."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT ticker, price, base_price FROM stocks") as cur:
+            stocks = await cur.fetchall()
+
+        results = []
+        for stock in stocks:
+            async with db.execute(
+                """SELECT price FROM price_history WHERE ticker = ?
+                   AND recorded_at >= datetime('now', '-24 hours')
+                   ORDER BY id ASC LIMIT 1""",
+                (stock["ticker"],),
+            ) as cur:
+                oldest = await cur.fetchone()
+
+            start_price = oldest["price"] if oldest else stock["price"]
+            change = round(stock["price"] - start_price, 2)
+            pct = round(change / start_price * 100, 1) if start_price != 0 else 0.0
+            results.append({
+                "ticker": stock["ticker"],
+                "price": stock["price"],
+                "change": change,
+                "pct": pct,
+            })
+        return sorted(results, key=lambda x: abs(x["pct"]), reverse=True)
 
 
 async def get_owners_of_stock(ticker: str):
@@ -587,11 +788,17 @@ async def get_owners_of_stock(ticker: str):
 
 # ── Admin Shop ─────────────────────────────────────────────────────────────────
 
-async def create_shop_item(name: str, description: str, price: float, stock: int = -1) -> int:
+async def create_shop_item(
+    name: str,
+    description: str,
+    price: float,
+    stock: int = -1,
+    role_id: str = None,
+) -> int:
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "INSERT INTO shop_items (name, description, price, stock) VALUES (?, ?, ?, ?)",
-            (name, description, price, stock),
+            "INSERT INTO shop_items (name, description, price, stock, role_id) VALUES (?, ?, ?, ?, ?)",
+            (name, description, price, stock, role_id),
         )
         await db.commit()
         return cur.lastrowid
@@ -611,8 +818,8 @@ async def get_shop_item(item_id: int):
             return await cur.fetchone()
 
 
-async def buy_shop_item(user_id: str, item_id: int) -> str:
-    """Returns 'not_found', 'out_of_stock', 'insufficient_funds', or 'ok'."""
+async def buy_shop_item(user_id: str, item_id: int):
+    """Returns 'not_found', 'out_of_stock', 'insufficient_funds', or dict with item info."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM shop_items WHERE id = ?", (item_id,)) as cur:
@@ -625,15 +832,20 @@ async def buy_shop_item(user_id: str, item_id: int) -> str:
             user = await cur.fetchone()
         if not user or user["cash"] < item["price"]:
             return "insufficient_funds"
+
         await db.execute("UPDATE users SET cash = cash - ? WHERE user_id = ?", (item["price"], user_id))
         if item["stock"] > 0:
             await db.execute("UPDATE shop_items SET stock = stock - 1 WHERE id = ?", (item_id,))
-        await db.execute(
-            "INSERT INTO user_items (user_id, item_name, item_description, source) VALUES (?, ?, ?, 'shop')",
-            (user_id, item["name"], item["description"]),
-        )
+
+        # Only add to inventory if this is NOT a role reward
+        if not item["role_id"]:
+            await db.execute(
+                "INSERT INTO user_items (user_id, item_name, item_description, source) VALUES (?, ?, ?, 'shop')",
+                (user_id, item["name"], item["description"]),
+            )
         await db.commit()
-    return "ok"
+
+    return {"name": item["name"], "description": item["description"], "role_id": item["role_id"]}
 
 
 async def delete_shop_item(item_id: int) -> bool:
@@ -647,7 +859,7 @@ async def delete_shop_item(item_id: int) -> bool:
 
 
 async def edit_shop_item(item_id: int, **kwargs) -> bool:
-    allowed = {"name", "description", "price", "stock"}
+    allowed = {"name", "description", "price", "stock", "role_id"}
     sets = {k: v for k, v in kwargs.items() if k in allowed}
     if not sets:
         return False
@@ -706,15 +918,20 @@ async def buy_listing(buyer_id: str, listing_id: int) -> str:
 
 
 async def delist_item(seller_id: str, listing_id: int) -> str:
-    """Returns 'not_found', 'not_yours', or 'ok'."""
+    """Returns 'not_found', 'not_yours', or 'ok'. Also returns item to inventory."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT seller_id FROM community_listings WHERE id = ?", (listing_id,)) as cur:
+        async with db.execute("SELECT * FROM community_listings WHERE id = ?", (listing_id,)) as cur:
             row = await cur.fetchone()
         if not row:
             return "not_found"
         if row["seller_id"] != seller_id:
             return "not_yours"
+        # Return item to seller's inventory
+        await db.execute(
+            "INSERT INTO user_items (user_id, item_name, item_description, source) VALUES (?, ?, ?, 'market')",
+            (seller_id, row["name"], row["description"]),
+        )
         await db.execute("DELETE FROM community_listings WHERE id = ?", (listing_id,))
         await db.commit()
     return "ok"
@@ -727,38 +944,31 @@ async def get_user_items(user_id: str):
             "SELECT * FROM user_items WHERE user_id = ? ORDER BY id DESC", (user_id,)
         ) as cur:
             return await cur.fetchall()
-            
+
+
 async def remove_user_item(user_id: str, item_name: str) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-
         async with db.execute(
-            """
-            SELECT id
-            FROM user_items
-            WHERE user_id = ? AND item_name = ?
-            ORDER BY id ASC
-            LIMIT 1
-            """,
+            "SELECT id FROM user_items WHERE user_id = ? AND item_name = ? LIMIT 1",
             (user_id, item_name),
         ) as cur:
-            item = await cur.fetchone()
-
-        if not item:
+            row = await cur.fetchone()
+        if not row:
             return False
-
-        await db.execute(
-            "DELETE FROM user_items WHERE id = ?",
-            (item["id"],)
-        )
+        await db.execute("DELETE FROM user_items WHERE id = ?", (row["id"],))
         await db.commit()
-        return True
+    return True
+
 
 # ── Work & Crime ───────────────────────────────────────────────────────────────
 
 async def do_work(user_id: str) -> dict:
     from datetime import datetime, timedelta, timezone
     import random as _r
+
+    work_min = float(await get_bot_setting("work_min", "50"))
+    work_max = float(await get_bot_setting("work_max", "200"))
+
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT cash, last_work FROM users WHERE user_id = ?", (user_id,)) as cur:
@@ -771,7 +981,7 @@ async def do_work(user_id: str) -> dict:
             if diff < timedelta(minutes=3):
                 remaining = timedelta(minutes=3) - diff
                 return {"ok": False, "seconds_left": int(remaining.total_seconds())}
-        earned = round(_r.uniform(150, 600), 2)
+        earned = round(_r.uniform(work_min, work_max), 2)
         now_iso = datetime.now(timezone.utc).isoformat()
         await db.execute(
             "UPDATE users SET cash = cash + ?, last_work = ? WHERE user_id = ?",
@@ -786,6 +996,11 @@ async def do_work(user_id: str) -> dict:
 async def do_crime(user_id: str) -> dict:
     from datetime import datetime, timedelta, timezone
     import random as _r
+
+    crime_min = float(await get_bot_setting("crime_min", "100"))
+    crime_max = float(await get_bot_setting("crime_max", "500"))
+    crime_fail_pct = float(await get_bot_setting("crime_fail_pct", "30")) / 100.0
+
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT cash, bank, last_crime FROM users WHERE user_id = ?", (user_id,)) as cur:
@@ -801,7 +1016,7 @@ async def do_crime(user_id: str) -> dict:
         now_iso = datetime.now(timezone.utc).isoformat()
         await db.execute("UPDATE users SET last_crime = ? WHERE user_id = ?", (now_iso, user_id))
         if _r.random() < 0.50:
-            earned = round(_r.uniform(300, 1500), 2)
+            earned = round(_r.uniform(crime_min, crime_max), 2)
             await db.execute("UPDATE users SET cash = cash + ? WHERE user_id = ?", (earned, user_id))
             await db.commit()
             async with db.execute("SELECT cash FROM users WHERE user_id = ?", (user_id,)) as cur:
@@ -809,7 +1024,7 @@ async def do_crime(user_id: str) -> dict:
             return {"ok": True, "success": True, "earned": earned, "new_cash": updated["cash"]}
         else:
             total = row["cash"] + row["bank"]
-            penalty = round(total * 0.30, 2)
+            penalty = round(total * crime_fail_pct, 2)
             wallet_deduct = min(penalty, row["cash"])
             bank_deduct = penalty - wallet_deduct
             await db.execute(
