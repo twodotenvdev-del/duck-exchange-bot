@@ -347,6 +347,7 @@ async def buy_cmd(interaction: discord.Interaction, ticker: str, amount: int):
         return
     new_price, fee = result
     user = await db.get_user(str(interaction.user.id))
+    fee_pct_val = await db.get_bot_setting("transaction_fee_pct", "2")
     embed = discord.Embed(
         title="✅ Purchase Successful",
         color=discord.Color.green(),
@@ -354,7 +355,7 @@ async def buy_cmd(interaction: discord.Interaction, ticker: str, amount: int):
             f"You bought **{amount:,} shares** of **{ticker}** ({stock['name']}) "
             f"at {fmt_money(stock['price'])} each.\n"
             f"**Base cost:** {fmt_money(cost)}\n"
-            f"**Transaction fee (2%):** -{fmt_money(fee)}\n"
+            f"**Transaction fee ({fee_pct_val}% per share):** -{fmt_money(fee)}\n"
             f"**Total spent:** {fmt_money(cost + fee)}\n"
             f"**Remaining cash:** {fmt_money(user['cash'])}\n"
             f"**New market price:** 📈 {fmt_money(new_price)}"
@@ -393,6 +394,7 @@ async def sell_cmd(interaction: discord.Interaction, ticker: str, amount: int):
     new_price, net_proceeds, fee = result
     gross = amount * stock["price"]
     user = await db.get_user(str(interaction.user.id))
+    fee_pct_val = await db.get_bot_setting("transaction_fee_pct", "2")
     embed = discord.Embed(
         title="✅ Sale Successful",
         color=discord.Color.blue(),
@@ -400,7 +402,7 @@ async def sell_cmd(interaction: discord.Interaction, ticker: str, amount: int):
             f"You sold **{amount:,} shares** of **{ticker}** ({stock['name']}) "
             f"at {fmt_money(stock['price'])} each.\n"
             f"**Gross proceeds:** {fmt_money(gross)}\n"
-            f"**Transaction fee (2%):** -{fmt_money(fee)}\n"
+            f"**Transaction fee ({fee_pct_val}% per share):** -{fmt_money(fee)}\n"
             f"**Net proceeds:** {fmt_money(net_proceeds)}\n"
             f"**New cash balance:** {fmt_money(user['cash'])}\n"
             f"**New market price:** 📉 {fmt_money(new_price)}"
