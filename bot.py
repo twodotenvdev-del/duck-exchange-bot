@@ -2886,39 +2886,39 @@ async def prefix_transfer(ctx, target: discord.Member = None, amount_str: str = 
 
 
 
-  # ── ?givebank ────────────────────────────────────────────────────────────────
+# ── ?givebank ────────────────────────────────────────────────────────────────
 
-  @bot.command(name="givebank", aliases=["giveb", "gb"])
-  async def prefix_givebank(ctx, target: discord.Member = None, amount_str: str = ""):
-      if not ctx.guild or not ctx.author.guild_permissions.administrator:
-          await ctx.send("❌ Only server administrators can use this command.", delete_after=8)
-          return
-      if not target or not amount_str:
-          await ctx.send("❌ Usage: `?givebank @user <amount>`")
-          return
-      try:
-          amount = float(amount_str)
-      except ValueError:
-          await ctx.send("❌ Invalid amount.")
-          return
-      if amount <= 0:
-          await ctx.send("❌ Amount must be positive.")
-          return
-      await db.ensure_user(str(target.id), target.display_name)
-      ok = await db.admin_give_bank(str(target.id), amount)
-      if not ok:
-          await ctx.send("❌ User not found.")
-          return
-      user_data = await db.get_user(str(target.id))
-      embed = discord.Embed(
-          title="🏦 Bank Cash Given",
-          color=discord.Color.green(),
-          description=f"Gave **{fmt_money(amount)}** to **{target.display_name}**'s bank.\nTheir new bank balance: {fmt_money(user_data['bank'])}",
-      )
-      await ctx.send(embed=embed)
+@bot.command(name="givebank", aliases=["giveb", "gb"])
+async def prefix_givebank(ctx, target: discord.Member = None, amount_str: str = ""):
+    if not ctx.guild or not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Only server administrators can use this command.", delete_after=8)
+        return
+    if not target or not amount_str:
+        await ctx.send("❌ Usage: `?givebank @user <amount>`")
+        return
+    try:
+        amount = float(amount_str)
+    except ValueError:
+        await ctx.send("❌ Invalid amount.")
+        return
+    if amount <= 0:
+        await ctx.send("❌ Amount must be positive.")
+        return
+    await db.ensure_user(str(target.id), target.display_name)
+    ok = await db.admin_give_bank(str(target.id), amount)
+    if not ok:
+        await ctx.send("❌ User not found.")
+        return
+    user_data = await db.get_user(str(target.id))
+    embed = discord.Embed(
+        title="🏦 Bank Cash Given",
+        color=discord.Color.green(),
+        description=f"Gave **{fmt_money(amount)}** to **{target.display_name}**'s bank.\nTheir new bank balance: {fmt_money(user_data['bank'])}",
+    )
+    await ctx.send(embed=embed)
 
 
-  # ── ?marketsummary ────────────────────────────────────────────────────────────
+# ── ?marketsummary ────────────────────────────────────────────────────────────
 
 @bot.command(name="marketsummary", aliases=["ms"])
 async def prefix_marketsummary(ctx):
