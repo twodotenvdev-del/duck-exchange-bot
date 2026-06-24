@@ -2053,8 +2053,8 @@ async def quick_create_stock(ctx, *, args: str = ""):
         return
     ticker = parts[0].strip().upper()
     name = parts[1].strip()
-    if not ticker.isalpha() or len(ticker) > 10:
-        await ctx.send("❌ Ticker must be letters only, max 10 characters.", delete_after=8)
+    if not ticker.isalnum() or len(ticker) > 10:
+        await ctx.send("❌ Ticker must be letters/numbers only, max 10 characters.", delete_after=8)
         return
     existing = await db.get_stock(ticker)
     if existing:
