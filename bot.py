@@ -437,6 +437,7 @@ async def chart_cmd(interaction: discord.Interaction, ticker: str):
     await interaction.followup.send(file=discord.File(buf, filename=f"{ticker}_chart.png"))
 
 
+@bot.tree.command(name="leaderboard", description="Show the top 10 richest players.")
 async def leaderboard_cmd(interaction: discord.Interaction):
     await interaction.response.defer()
     rows = await db.get_leaderboard(10)
@@ -1052,21 +1053,22 @@ async def withdraw_cmd(interaction: discord.Interaction, amount: float):
     if amount <= 0:
         await interaction.response.send_message("❌ Amount must be positive.", ephemeral=True)
         return
-    result = await db.withdraw(str(interaction.user.id), amount)
-    if result == "insufficient_funds":
-        user = await db.get_user(str(interaction.user.id))
-        await interaction.response.send_message(
-            f"❌ You only have {fmt_money(user['bank'])} in your bank.", ephemeral=True
-        )
-        return
     user = await db.get_user(str(interaction.user.id))
+    actual = min(amount, user["bank"])
+    if actual <= 0:
+        await interaction.response.send_message("❌ Your bank is empty.", ephemeral=True)
+        return
+    await db.withdraw(str(interaction.user.id), actual)
+    user = await db.get_user(str(interaction.user.id))
+    was_partial = actual < amount
+    desc = f"Withdrew **{fmt_money(actual)}** from your bank.\n"
+    if was_partial:
+        desc += f"_(You only had {fmt_money(actual)}, so that amount was withdrawn.)_\n"
+    desc += f"👛 Wallet: {fmt_money(user['cash'])}  |  🏦 Bank: {fmt_money(user['bank'])}"
     embed = discord.Embed(
         title="🏦 Withdrawal Successful",
         color=discord.Color.green(),
-        description=(
-            f"Withdrew **{fmt_money(amount)}** from your bank.\n"
-            f"👛 Wallet: {fmt_money(user['cash'])}  |  🏦 Bank: {fmt_money(user['bank'])}"
-        ),
+        description=desc,
     )
     await interaction.response.send_message(embed=embed)
 
@@ -2081,6 +2083,720 @@ async def quick_create_stock(ctx, *, args: str = ""):
         ),
     )
     embed.set_footer(text="Use /editstock to adjust settings later.")
+    await ctx.send(embed=embed)
+
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PREFIX COMMANDS  (? and ! prefix — mirrors all slash commands)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def _resolve_amount(user_id: str, raw: str, source: str = "cash") -> tuple:
+    """Parse a raw amount string ('all' or a number). Returns (amount, error_str)."""
+    if raw.lower() == "all":
+        user = await db.get_user(user_id)
+        if user is None:
+            return None, "❌ User not found."
+        amount = user[source]
+        if amount <= 0:
+            label = "wallet" if source == "cash" else "bank"
+            return None, f"❌ Your {label} is empty."
+        return amount, None
+    try:
+        amount = float(raw)
+        if amount <= 0:
+            return None, "❌ Amount must be positive."
+        return amount, None
+    except ValueError:
+        return None, "❌ Invalid amount. Use a number or `all`."
+
+
+# ── ?balance ──────────────────────────────────────────────────────────────────
+
+@bot.command(name="balance", aliases=["bal", "wallet"])
+async def prefix_balance(ctx):
+    await db.ensure_user(str(ctx.author.id), ctx.author.display_name)
+    user = await db.get_user(str(ctx.author.id))
+    embed = discord.Embed(
+        title=f"💰 {ctx.author.display_name}'s Balance",
+        color=discord.Color.green(),
+    )
+    embed.add_field(name="👛 Wallet", value=fmt_money(user["cash"]), inline=True)
+    embed.add_field(name="🏦 Bank", value=fmt_money(user["bank"]), inline=True)
+    embed.add_field(name="💰 Total", value=fmt_money(user["cash"] + user["bank"]), inline=True)
+    embed.set_footer(text="Use ?deposit or ?withdraw to move money · Wallet is stealable, bank is safe!")
+    await ctx.send(embed=embed)
+
+
+# ── ?deposit ──────────────────────────────────────────────────────────────────
+
+@bot.command(name="deposit")
+async def prefix_deposit(ctx, amount_str: str = ""):
+    if not amount_str:
+        await ctx.send("❌ Usage: `?deposit <amount>` or `?deposit all`")
+        return
+    await db.ensure_user(str(ctx.author.id), ctx.author.display_name)
+    amount, err = await _resolve_amount(str(ctx.author.id), amount_str, "cash")
+    if err:
+        await ctx.send(err)
+        return
+    result = await db.deposit(str(ctx.author.id), amount)
+    if result == "insufficient_funds":
+        user = await db.get_user(str(ctx.author.id))
+        await ctx.send(f"❌ You only have {fmt_money(user['cash'])} in your wallet.")
+        return
+    user = await db.get_user(str(ctx.author.id))
+    embed = discord.Embed(
+        title="🏦 Deposit Successful",
+        color=discord.Color.green(),
+        description=(
+            f"Deposited **{fmt_money(amount)}** into your bank.\n"
+            f"👛 Wallet: {fmt_money(user['cash'])}  |  🏦 Bank: {fmt_money(user['bank'])}"
+        ),
+    )
+    await ctx.send(embed=embed)
+
+
+# ── ?withdraw ─────────────────────────────────────────────────────────────────
+
+@bot.command(name="withdraw")
+async def prefix_withdraw(ctx, amount_str: str = ""):
+    if not amount_str:
+        await ctx.send("❌ Usage: `?withdraw <amount>` or `?withdraw all`")
+        return
+    await db.ensure_user(str(ctx.author.id), ctx.author.display_name)
+    user = await db.get_user(str(ctx.author.id))
+    if amount_str.lower() == "all":
+        actual = user["bank"]
+    else:
+        try:
+            requested = float(amount_str)
+        except ValueError:
+            await ctx.send("❌ Invalid amount. Use a number or `all`.")
+            return
+        actual = min(requested, user["bank"])
+    if actual <= 0:
+        await ctx.send("❌ Your bank is empty.")
+        return
+    await db.withdraw(str(ctx.author.id), actual)
+    user = await db.get_user(str(ctx.author.id))
+    desc = f"Withdrew **{fmt_money(actual)}** from your bank.\n"
+    if amount_str.lower() != "all":
+        requested = float(amount_str)
+        if actual < requested:
+            desc += f"_(You only had {fmt_money(actual)}, so that amount was withdrawn.)_\n"
+    desc += f"👛 Wallet: {fmt_money(user['cash'])}  |  🏦 Bank: {fmt_money(user['bank'])}"
+    embed = discord.Embed(title="🏦 Withdrawal Successful", color=discord.Color.green(), description=desc)
+    await ctx.send(embed=embed)
+
+
+# ── ?portfolio ────────────────────────────────────────────────────────────────
+
+@bot.command(name="portfolio", aliases=["pf", "holdings"])
+async def prefix_portfolio(ctx):
+    await db.ensure_user(str(ctx.author.id), ctx.author.display_name)
+    user = await db.get_user(str(ctx.author.id))
+    holdings = await db.get_user_holdings(str(ctx.author.id))
+    cash = user["cash"]
+    bank = user["bank"]
+    holdings_value = sum(h["shares"] * h["price"] for h in holdings)
+    net_worth = cash + bank + holdings_value
+    embed = discord.Embed(title=f"🦆 {ctx.author.display_name}'s Portfolio", color=discord.Color.green())
+    embed.add_field(name="👛 Wallet", value=fmt_money(cash), inline=True)
+    embed.add_field(name="🏦 Bank", value=fmt_money(bank), inline=True)
+    embed.add_field(name="📈 Holdings Value", value=fmt_money(holdings_value), inline=True)
+    embed.add_field(name="🏆 Net Worth", value=fmt_money(net_worth), inline=True)
+    if holdings:
+        lines = []
+        for h in holdings:
+            current_value = h["shares"] * h["price"]
+            cost_basis = h["shares"] * h["avg_cost"]
+            pl = current_value - cost_basis
+            pl_pct = (pl / cost_basis * 100) if cost_basis > 0 else 0.0
+            pl_sign = "+" if pl >= 0 else ""
+            pl_emoji = "📈" if pl >= 0 else "📉"
+            lines.append(
+                f"**{h['ticker']}** ({h['name']}) — {h['shares']:,} shares\n"
+                f"  Bought @ {fmt_money(h['avg_cost'])} avg  ·  Now {fmt_money(h['price'])}\n"
+                f"  Value: {fmt_money(current_value)}  ·  P&L: {pl_emoji} {pl_sign}{fmt_money(pl)} ({pl_sign}{pl_pct:.1f}%)"
+            )
+        embed.add_field(name="📊 Shares Owned", value="\n\n".join(lines), inline=False)
+    else:
+        embed.add_field(name="📊 Shares Owned", value="None — use `?buy` to get started!", inline=False)
+    await ctx.send(embed=embed)
+
+
+# ── ?leaderboard ──────────────────────────────────────────────────────────────
+
+@bot.command(name="leaderboard", aliases=["lb", "top"])
+async def prefix_leaderboard(ctx):
+    rows = await db.get_leaderboard(10)
+    if not rows:
+        await ctx.send("No users yet! Use `?portfolio` to register.")
+        return
+    embed = discord.Embed(title="🏆 Duck Exchange Leaderboard", color=discord.Color.gold())
+    medals = ["🥇", "🥈", "🥉"]
+    lines = []
+    for i, row in enumerate(rows):
+        net_worth = row["cash"] + row["bank"] + row["holdings_value"]
+        medal = medals[i] if i < 3 else f"**#{i+1}**"
+        lines.append(f"{medal} **{row['username']}** — {fmt_money(net_worth)}")
+    embed.description = "\n".join(lines)
+    await ctx.send(embed=embed)
+
+
+# ── ?stocks ───────────────────────────────────────────────────────────────────
+
+@bot.command(name="stocks")
+async def prefix_stocks(ctx):
+    rows = await db.get_all_stocks()
+    if not rows:
+        await ctx.send("No stocks created yet. An admin can use `?cs` to add one.")
+        return
+    embed = discord.Embed(title="🦆 Duck Exchange — Stock Market", color=discord.Color.yellow())
+    lines = [f"**{r['ticker']}** — {r['name']} — {fmt_money(r['price'])}" for r in rows]
+    embed.description = "\n".join(lines)
+    embed.set_footer(text="Use ?buy <ticker> <amount> to invest!")
+    await ctx.send(embed=embed)
+
+
+# ── ?stock <ticker> ───────────────────────────────────────────────────────────
+
+@bot.command(name="stock")
+async def prefix_stock(ctx, ticker: str = ""):
+    if not ticker:
+        await ctx.send("❌ Usage: `?stock <TICKER>`")
+        return
+    ticker = ticker.upper()
+    stock = await db.get_stock(ticker)
+    if not stock:
+        await ctx.send(f"❌ No stock **{ticker}** found.")
+        return
+    owners = await db.get_owners_of_stock(ticker)
+    changes = await db.get_recent_price_changes(ticker, 5)
+    fee_pct = await db.get_bot_setting("transaction_fee_pct", "2")
+    if changes:
+        net = sum(changes)
+        trend = "📈 Trending Up" if net > 0 else ("📉 Trending Down" if net < 0 else "➡️ Flat")
+    else:
+        trend = "❓ No data yet"
+    base_p = stock["base_price"] if stock["base_price"] > 0 else stock["price"]
+    vs_base = stock["price"] - base_p
+    vs_base_pct = (vs_base / base_p * 100) if base_p != 0 else 0.0
+    vs_sign = "+" if vs_base >= 0 else ""
+    floor = round(base_p * 0.05, 2)
+    change_str = "  ".join(
+        ("🟡 +$0.00" if c == 0 else ("🟢 +" + fmt_money(c) if c > 0 else "🔴 " + fmt_money(c)))
+        for c in changes
+    ) if changes else "No history"
+    embed = discord.Embed(title=f"📊 {ticker} — {stock['name']}", color=discord.Color.yellow())
+    embed.add_field(name="💵 Current Price", value=fmt_money(stock["price"]), inline=True)
+    embed.add_field(name="🏁 Base Price", value=fmt_money(base_p), inline=True)
+    embed.add_field(name="📐 vs Base", value=f"{vs_sign}{fmt_money(vs_base)} ({vs_sign}{vs_base_pct:.1f}%)", inline=True)
+    embed.add_field(name="🛡️ Price Floor", value=fmt_money(floor), inline=True)
+    embed.add_field(name="👥 Shareholders", value=str(len(owners)), inline=True)
+    embed.add_field(name="📉 Trend", value=trend, inline=True)
+    embed.add_field(
+        name="⚙️ Volatility",
+        value=f"Change range: ${stock['min_change']:,.0f}–${stock['max_change']:,.0f}\nInterval: every **{stock['fluctuation_minutes']}** min",
+        inline=False,
+    )
+    embed.add_field(name="🕐 Last 5 Changes", value=change_str, inline=False)
+    embed.set_footer(text=f"Transaction fee: {fee_pct}% on buy & sell  ·  Use ?chart for price history")
+    await ctx.send(embed=embed)
+
+
+# ── ?buy <ticker> <amount|all> ────────────────────────────────────────────────
+
+@bot.command(name="buy")
+async def prefix_buy(ctx, ticker: str = "", amount_str: str = ""):
+    if not ticker or not amount_str:
+        await ctx.send("❌ Usage: `?buy <TICKER> <amount>` or `?buy <TICKER> all`")
+        return
+    await db.ensure_user(str(ctx.author.id), ctx.author.display_name)
+    ticker = ticker.upper()
+    stock = await db.get_stock(ticker)
+    if not stock:
+        await ctx.send(f"❌ No stock **{ticker}** found. Use `?stocks` to see available stocks.")
+        return
+    if amount_str.lower() == "all":
+        fee_pct_val = float(await db.get_bot_setting("transaction_fee_pct", "2"))
+        user = await db.get_user(str(ctx.author.id))
+        max_shares = int(user["cash"] / (stock["price"] * (1 + fee_pct_val / 100)))
+        if max_shares <= 0:
+            await ctx.send(f"❌ You don't have enough cash to buy any shares of **{ticker}**.")
+            return
+        amount = max_shares
+    else:
+        try:
+            amount = int(float(amount_str))
+        except ValueError:
+            await ctx.send("❌ Invalid amount. Use a whole number or `all`.")
+            return
+    if amount <= 0:
+        await ctx.send("❌ Amount must be at least 1.")
+        return
+    result = await db.buy_stock(str(ctx.author.id), ticker, amount, stock["price"])
+    if result == "too_many_shares":
+        holdings = await db.get_user_holdings(str(ctx.author.id))
+        owned = sum(h["shares"] for h in holdings)
+        await ctx.send(f"❌ You can only own **30 total shares**.\nYou own: **{owned}/30**  ·  Trying to buy: **{amount}**")
+        return
+    if result == "insufficient_funds":
+        fee_pct = await db.get_bot_setting("transaction_fee_pct", "2")
+        await ctx.send(f"❌ You don't have enough cash.\n_(Note: a **{fee_pct}% transaction fee** is added to the total cost)_")
+        return
+    new_price, fee = result
+    user = await db.get_user(str(ctx.author.id))
+    fee_pct_show = await db.get_bot_setting("transaction_fee_pct", "2")
+    total_cost = amount * stock["price"]
+    embed = discord.Embed(
+        title="✅ Purchase Successful",
+        color=discord.Color.green(),
+        description=(
+            f"You bought **{amount:,} shares** of **{ticker}** ({stock['name']}) at {fmt_money(stock['price'])} each.\n"
+            f"**Subtotal:** {fmt_money(total_cost)}\n"
+            f"**Transaction fee ({fee_pct_show}%):** {fmt_money(fee)}\n"
+            f"**Total cost:** {fmt_money(total_cost + fee)}\n"
+            f"**New wallet balance:** {fmt_money(user['cash'])}"
+        ),
+    )
+    await ctx.send(embed=embed)
+
+
+# ── ?sell <ticker> <amount|all> ───────────────────────────────────────────────
+
+@bot.command(name="sell")
+async def prefix_sell(ctx, ticker: str = "", amount_str: str = ""):
+    if not ticker or not amount_str:
+        await ctx.send("❌ Usage: `?sell <TICKER> <amount>` or `?sell <TICKER> all`")
+        return
+    await db.ensure_user(str(ctx.author.id), ctx.author.display_name)
+    ticker = ticker.upper()
+    stock = await db.get_stock(ticker)
+    if not stock:
+        await ctx.send(f"❌ No stock **{ticker}** found.")
+        return
+    holdings = await db.get_user_holdings(str(ctx.author.id))
+    holding = next((h for h in holdings if h["ticker"] == ticker), None)
+    if not holding or holding["shares"] <= 0:
+        await ctx.send(f"❌ You don't own any shares of **{ticker}**.")
+        return
+    if amount_str.lower() == "all":
+        amount = holding["shares"]
+    else:
+        try:
+            amount = int(float(amount_str))
+        except ValueError:
+            await ctx.send("❌ Invalid amount. Use a whole number or `all`.")
+            return
+    if amount <= 0:
+        await ctx.send("❌ Amount must be at least 1.")
+        return
+    result = await db.sell_stock(str(ctx.author.id), ticker, amount, stock["price"])
+    if result == "insufficient_shares":
+        await ctx.send(f"❌ You only own **{holding['shares']} shares** of **{ticker}**.")
+        return
+    new_price, fee = result
+    fee_pct_val = await db.get_bot_setting("transaction_fee_pct", "2")
+    gross = amount * stock["price"]
+    net_proceeds = gross - fee
+    user = await db.get_user(str(ctx.author.id))
+    embed = discord.Embed(
+        title="✅ Sale Successful",
+        color=discord.Color.green(),
+        description=(
+            f"You sold **{amount:,} shares** of **{ticker}** ({stock['name']}) at {fmt_money(stock['price'])} each.\n"
+            f"**Gross proceeds:** {fmt_money(gross)}\n"
+            f"**Transaction fee ({fee_pct_val}% per share):** -{fmt_money(fee)}\n"
+            f"**Net proceeds:** {fmt_money(net_proceeds)}\n"
+            f"**New cash balance:** {fmt_money(user['cash'])}\n"
+            f"**New market price:** 📉 {fmt_money(new_price)}"
+        ),
+    )
+    await ctx.send(embed=embed)
+
+
+# ── ?chart <ticker> ───────────────────────────────────────────────────────────
+
+@bot.command(name="chart")
+async def prefix_chart(ctx, ticker: str = ""):
+    if not ticker:
+        await ctx.send("❌ Usage: `?chart <TICKER>`")
+        return
+    ticker = ticker.upper()
+    stock = await db.get_stock(ticker)
+    if not stock:
+        await ctx.send(f"❌ No stock **{ticker}** found.")
+        return
+    history = await db.get_price_history(ticker)
+    if not history or len(history) < 2:
+        await ctx.send(f"📊 **{ticker}** — {stock['name']}\nCurrent price: {fmt_money(stock['price'])}\n\nNot enough price history yet.")
+        return
+    prices = [row["price"] for row in history]
+    owners = await db.get_owners_of_stock(ticker)
+    base_price = stock["base_price"] if stock["base_price"] > 0 else prices[0]
+    buf = render_chart_image(prices, ticker, stock["name"], shareholders=len(owners), base_price=base_price)
+    await ctx.send(file=discord.File(buf, filename=f"{ticker}_chart.png"))
+
+
+# ── ?work ─────────────────────────────────────────────────────────────────────
+
+@bot.command(name="work")
+async def prefix_work(ctx):
+    await db.ensure_user(str(ctx.author.id), ctx.author.display_name)
+    result = await db.do_work(str(ctx.author.id))
+    if not result.get("ok"):
+        secs = result.get("seconds_left", 0)
+        m, s = divmod(secs, 60)
+        await ctx.send(f"⏳ You're too tired to work! Rest for **{m}m {s}s**.")
+        return
+    work_min = await db.get_bot_setting("work_min", "50")
+    work_max = await db.get_bot_setting("work_max", "200")
+    msg = random.choice(WORK_MESSAGES)
+    embed = discord.Embed(
+        title="💼 Work Complete",
+        color=discord.Color.blue(),
+        description=(
+            f"{msg} and earned **{fmt_money(result['earned'])}**!\n\n"
+            f"👛 New wallet: {fmt_money(result['new_cash'])}"
+        ),
+    )
+    embed.set_footer(text=f"Cooldown: 3 min  ·  Payout: ${work_min}–${work_max}")
+    await ctx.send(embed=embed)
+
+
+# ── ?crime ────────────────────────────────────────────────────────────────────
+
+@bot.command(name="crime")
+async def prefix_crime(ctx):
+    await db.ensure_user(str(ctx.author.id), ctx.author.display_name)
+    result = await db.do_crime(str(ctx.author.id))
+    if not result.get("ok"):
+        secs = result.get("seconds_left", 0)
+        m, s = divmod(secs, 60)
+        await ctx.send(f"⏳ Laying low after last time. Try again in **{m}m {s}s**.")
+        return
+    crime_min = await db.get_bot_setting("crime_min", "100")
+    crime_max = await db.get_bot_setting("crime_max", "500")
+    crime_fail_pct = await db.get_bot_setting("crime_fail_pct", "30")
+    if result["success"]:
+        msg = random.choice(CRIME_SUCCESS_MESSAGES)
+        embed = discord.Embed(
+            title="🦹 Crime Successful",
+            color=discord.Color.green(),
+            description=f"{msg} and pocketed **{fmt_money(result['earned'])}**!\n\n👛 New wallet: {fmt_money(result['new_cash'])}",
+        )
+    else:
+        msg = random.choice(CRIME_FAIL_MESSAGES)
+        embed = discord.Embed(
+            title="🚔 Busted!",
+            color=discord.Color.red(),
+            description=(
+                f"{msg}\n\n💸 You lost **{fmt_money(result['penalty'])}** ({crime_fail_pct}% of your wealth) in fines!\n"
+                f"👛 Wallet: {fmt_money(result['new_cash'])}  |  🏦 Bank: {fmt_money(result['new_bank'])}"
+            ),
+        )
+    embed.set_footer(text=f"Cooldown: 5 min  ·  Payout: ${crime_min}–${crime_max}  ·  Fail: {crime_fail_pct}% wealth")
+    await ctx.send(embed=embed)
+
+
+# ── ?claim ────────────────────────────────────────────────────────────────────
+
+@bot.command(name="claim")
+async def prefix_claim(ctx):
+    await db.ensure_user(str(ctx.author.id), ctx.author.display_name)
+    result = await db.claim_daily(str(ctx.author.id))
+    if not result.get("ok"):
+        secs = result.get("seconds_left", 0)
+        m, s = divmod(secs, 60)
+        time_str = f"{m}m {s}s" if m else f"{s}s"
+        await ctx.send(f"⏳ Already claimed! Come back in **{time_str}**.")
+        return
+    reward = result.get("reward", 100)
+    cooldown = result.get("cooldown_secs", 60)
+    c_m, c_s = divmod(cooldown, 60)
+    cooldown_str = f"{c_m}m {c_s}s" if c_m else f"{c_s}s"
+    embed = discord.Embed(
+        title=f"✅ Claimed {fmt_money(reward)}!",
+        color=discord.Color.green(),
+        description=f"💵 Added **{fmt_money(reward)}** to your wallet.\n👛 New wallet balance: {fmt_money(result['new_cash'])}",
+    )
+    embed.set_footer(text=f"You can claim again in {cooldown_str}!")
+    await ctx.send(embed=embed)
+
+
+# ── ?flip <heads|tails> <amount|all> ─────────────────────────────────────────
+
+@bot.command(name="flip")
+async def prefix_flip(ctx, choice: str = "", amount_str: str = ""):
+    if not choice or not amount_str:
+        await ctx.send("❌ Usage: `?flip <heads|tails> <amount>` or `?flip heads all`")
+        return
+    choice = choice.lower()
+    if choice not in ("heads", "tails"):
+        await ctx.send("❌ Choose `heads` or `tails`.")
+        return
+    await db.ensure_user(str(ctx.author.id), ctx.author.display_name)
+    amount, err = await _resolve_amount(str(ctx.author.id), amount_str, "cash")
+    if err:
+        await ctx.send(err)
+        return
+    user = await db.get_user(str(ctx.author.id))
+    if user["cash"] < amount:
+        await ctx.send(f"❌ You only have {fmt_money(user['cash'])} in your wallet.")
+        return
+    flip = random.choice(["heads", "tails"])
+    won = flip == choice
+    net = amount if won else -amount
+    async with aiosqlite.connect(db.DB_PATH) as _db:
+        await _db.execute("UPDATE users SET cash = cash + ? WHERE user_id = ?", (net, str(ctx.author.id)))
+        await _db.commit()
+    user_after = await db.get_user(str(ctx.author.id))
+    coin = "🟡 Heads" if flip == "heads" else "⚫ Tails"
+    embed = discord.Embed(
+        title=f"{coin}!",
+        color=discord.Color.green() if won else discord.Color.red(),
+        description=(
+            f"You picked **{choice}** and the coin landed on **{flip}**.\n"
+            f"{'🎉 You won' if won else '💸 You lost'} **{fmt_money(amount)}**!\n"
+            f"👛 New wallet: {fmt_money(user_after['cash'])}"
+        ),
+    )
+    await ctx.send(embed=embed)
+
+
+# ── ?blackjack <amount|all> ───────────────────────────────────────────────────
+
+@bot.command(name="blackjack", aliases=["bj"])
+async def prefix_blackjack(ctx, amount_str: str = ""):
+    if not amount_str:
+        await ctx.send("❌ Usage: `?blackjack <amount>` or `?bj all`")
+        return
+    await db.ensure_user(str(ctx.author.id), ctx.author.display_name)
+    amount, err = await _resolve_amount(str(ctx.author.id), amount_str, "cash")
+    if err:
+        await ctx.send(err)
+        return
+    if ctx.author.id in active_bj_games:
+        await ctx.send("❌ You already have a blackjack game in progress!")
+        return
+    user = await db.get_user(str(ctx.author.id))
+    if user["cash"] < amount:
+        await ctx.send(f"❌ You only have {fmt_money(user['cash'])} in your wallet.")
+        return
+    async with aiosqlite.connect(db.DB_PATH) as _db:
+        await _db.execute("UPDATE users SET cash = cash - ? WHERE user_id = ?", (amount, str(ctx.author.id)))
+        await _db.commit()
+    deck = new_deck()
+    player = [deck.pop(), deck.pop()]
+    dealer = [deck.pop(), deck.pop()]
+    game = {"deck": deck, "player": player, "dealer": dealer, "bet": amount}
+    active_bj_games[ctx.author.id] = game
+    pv = hand_value(player)
+    view = BlackjackView(ctx.author.id)
+    if pv == 21:
+        while hand_value(dealer) < 17:
+            dealer.append(deck.pop())
+        dv = hand_value(dealer)
+        if dv == 21:
+            game["outcome"], game["net"] = "push", 0.0
+        else:
+            game["outcome"], game["net"] = "blackjack", round(amount * 1.5, 2)
+        async with aiosqlite.connect(db.DB_PATH) as _db:
+            await _db.execute("UPDATE users SET cash = cash + ? WHERE user_id = ?", (amount + game["net"], str(ctx.author.id)))
+            await _db.commit()
+        active_bj_games.pop(ctx.author.id, None)
+        await ctx.send(embed=build_bj_embed(game, finished=True))
+        return
+    await ctx.send(embed=build_bj_embed(game), view=view)
+
+
+# ── ?roulette <bet> <amount|all> ──────────────────────────────────────────────
+
+@bot.command(name="roulette")
+async def prefix_roulette(ctx, bet: str = "", amount_str: str = ""):
+    if not bet or not amount_str:
+        await ctx.send(
+            "❌ Usage: `?roulette <bet> <amount>`\n"
+            "Bets: `red`, `black`, `odd`, `even`, `1-18`, `19-36`, or a number `0`–`36`"
+        )
+        return
+    await db.ensure_user(str(ctx.author.id), ctx.author.display_name)
+    amount, err = await _resolve_amount(str(ctx.author.id), amount_str, "cash")
+    if err:
+        await ctx.send(err)
+        return
+    multiplier, _ = roulette_payout(bet, 0)
+    if multiplier == -1.0:
+        await ctx.send("❌ Invalid bet. Choose: `red`, `black`, `odd`, `even`, `1-18`, `19-36`, or a number `0`–`36`.")
+        return
+    user = await db.get_user(str(ctx.author.id))
+    if user["cash"] < amount:
+        await ctx.send(f"❌ You only have {fmt_money(user['cash'])} — not enough to bet {fmt_money(amount)}.")
+        return
+    channel_id = ctx.channel.id
+    if channel_id in active_roulette_games:
+        game = active_roulette_games[channel_id]
+        if any(p["user_id"] == str(ctx.author.id) for p in game["players"]):
+            await ctx.send("⚠️ You're already in this game!")
+            return
+        async with aiosqlite.connect(db.DB_PATH) as _db:
+            await _db.execute("UPDATE users SET cash = cash - ? WHERE user_id = ?", (amount, str(ctx.author.id)))
+            await _db.commit()
+        game["players"].append({
+            "user_id": str(ctx.author.id),
+            "username": ctx.author.display_name,
+            "amount": amount,
+            "bet": bet.lower().strip(),
+        })
+        try:
+            await game["message"].edit(embed=build_lobby_embed(game["players"], ROULETTE_COUNTDOWN))
+        except Exception:
+            pass
+        await ctx.send(f"✅ **{ctx.author.display_name}** joined the game! Bet: {fmt_money(amount)} on `{bet}`")
+        return
+    async with aiosqlite.connect(db.DB_PATH) as _db:
+        await _db.execute("UPDATE users SET cash = cash - ? WHERE user_id = ?", (amount, str(ctx.author.id)))
+        await _db.commit()
+    players = [{"user_id": str(ctx.author.id), "username": ctx.author.display_name, "amount": amount, "bet": bet.lower().strip()}]
+    msg = await ctx.send(embed=build_lobby_embed(players, ROULETTE_COUNTDOWN))
+    game = {"players": players, "message": msg}
+    active_roulette_games[channel_id] = game
+    await asyncio.sleep(ROULETTE_COUNTDOWN)
+    active_roulette_games.pop(channel_id, None)
+    spin = random.randint(0, 36)
+    RED_NUMBERS = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
+    result_lines = []
+    for p in players:
+        mult, _ = roulette_payout(p["bet"], spin)
+        net = round(p["amount"] * mult, 2)
+        async with aiosqlite.connect(db.DB_PATH) as _db:
+            await _db.execute("UPDATE users SET cash = cash + ? WHERE user_id = ?", (p["amount"] + net, p["user_id"]))
+            await _db.commit()
+        won = net > 0
+        result_lines.append(f"{'🎉' if won else '💸'} **{p['username']}** bet `{p['bet']}` — {'won' if won else 'lost'} {fmt_money(abs(net))}")
+    color_name = "🔴 Red" if spin in RED_NUMBERS else ("⬛ Black" if spin != 0 else "🟢 Green")
+    result_embed = discord.Embed(
+        title=f"🎰 Roulette — Landed on **{spin}** ({color_name})",
+        color=discord.Color.gold(),
+        description="\n".join(result_lines),
+    )
+    await msg.edit(embed=result_embed)
+
+
+# ── ?steal <@user> ────────────────────────────────────────────────────────────
+
+@bot.command(name="steal")
+async def prefix_steal(ctx, target: discord.Member = None):
+    if not target:
+        await ctx.send("❌ Usage: `?steal @user`")
+        return
+    if target.id == ctx.author.id:
+        await ctx.send("❌ You can't steal from yourself.")
+        return
+    await db.ensure_user(str(ctx.author.id), ctx.author.display_name)
+    await db.ensure_user(str(target.id), target.display_name)
+    target_data = await db.get_user(str(target.id))
+    if target_data["cash"] <= 0:
+        await ctx.send(f"❌ **{target.display_name}**'s wallet is empty — nothing to steal!")
+        return
+    result = await db.steal_wallet(str(ctx.author.id), str(target.id))
+    steal_success_rate = await db.get_bot_setting("steal_success_rate", "30")
+    steal_fail_pct = await db.get_bot_setting("steal_fail_pct", "10")
+    if result.get("success"):
+        embed = discord.Embed(
+            title="🦹 Steal Successful!",
+            color=discord.Color.green(),
+            description=(
+                f"You swiped **{fmt_money(result['stolen'])}** from **{target.display_name}**'s wallet!\n"
+                f"👛 Your new wallet: {fmt_money(result['new_cash'])}"
+            ),
+        )
+    else:
+        embed = discord.Embed(
+            title="🚔 Caught in the Act!",
+            color=discord.Color.red(),
+            description=(
+                f"You tried to steal from **{target.display_name}** but got caught!\n"
+                f"💸 You lost **{fmt_money(result.get('penalty', 0))}** ({steal_fail_pct}% of your wallet) in fines.\n"
+                f"👛 Your new wallet: {fmt_money(result.get('new_cash', 0))}"
+            ),
+        )
+    embed.set_footer(text=f"Success rate: {steal_success_rate}%  ·  Fail penalty: {steal_fail_pct}% of wallet")
+    await ctx.send(embed=embed)
+
+
+# ── ?transfer <@user> <amount|all> ───────────────────────────────────────────
+
+@bot.command(name="transfer")
+async def prefix_transfer(ctx, target: discord.Member = None, amount_str: str = ""):
+    if not target or not amount_str:
+        await ctx.send("❌ Usage: `?transfer @user <amount>` or `?transfer @user all`")
+        return
+    if target.id == ctx.author.id:
+        await ctx.send("❌ You can't transfer to yourself.")
+        return
+    await db.ensure_user(str(ctx.author.id), ctx.author.display_name)
+    await db.ensure_user(str(target.id), target.display_name)
+    amount, err = await _resolve_amount(str(ctx.author.id), amount_str, "cash")
+    if err:
+        await ctx.send(err)
+        return
+    result = await db.transfer_cash(str(ctx.author.id), str(target.id), amount)
+    if result == "insufficient_funds":
+        user = await db.get_user(str(ctx.author.id))
+        await ctx.send(f"❌ You only have {fmt_money(user['cash'])} in your wallet.")
+        return
+    sender = await db.get_user(str(ctx.author.id))
+    embed = discord.Embed(
+        title="💸 Transfer Successful",
+        color=discord.Color.green(),
+        description=(
+            f"Sent **{fmt_money(amount)}** to **{target.display_name}**.\n"
+            f"👛 Your new wallet: {fmt_money(sender['cash'])}"
+        ),
+    )
+    await ctx.send(embed=embed)
+
+
+# ── ?marketsummary ────────────────────────────────────────────────────────────
+
+@bot.command(name="marketsummary", aliases=["ms"])
+async def prefix_marketsummary(ctx):
+    rows = await db.get_market_summary()
+    if not rows:
+        await ctx.send("📊 No market data yet.")
+        return
+    embed = discord.Embed(title="📊 Market Summary — Top Movers (24h)", color=discord.Color.yellow())
+    lines = []
+    for r in rows[:10]:
+        change = r.get("change_24h", 0)
+        arrow = "📈" if change > 0 else ("📉" if change < 0 else "➡️")
+        sign = "+" if change >= 0 else ""
+        lines.append(f"{arrow} **{r['ticker']}** {fmt_money(r['price'])}  ({sign}{fmt_money(change)})")
+    embed.description = "\n".join(lines) if lines else "No data."
+    await ctx.send(embed=embed)
+
+
+# ── ?inventory ────────────────────────────────────────────────────────────────
+
+@bot.command(name="inventory", aliases=["inv"])
+async def prefix_inventory(ctx):
+    await db.ensure_user(str(ctx.author.id), ctx.author.display_name)
+    items = await db.get_user_items(str(ctx.author.id))
+    embed = discord.Embed(title=f"🎒 {ctx.author.display_name}'s Inventory", color=discord.Color.og_blurple())
+    if not items:
+        embed.description = "Your inventory is empty! Visit `/shop` or `/market` to buy something."
+    else:
+        lines = []
+        for it in items:
+            source_icon = "🛒" if it["source"] == "shop" else "🏪"
+            desc = f" — _{it['item_description']}_" if it["item_description"] else ""
+            lines.append(f"{source_icon} **{it['item_name']}**{desc}")
+        embed.description = "\n".join(lines)
+        embed.set_footer(text=f"{len(items)} item(s)  ·  🛒 = admin shop  ·  🏪 = market")
     await ctx.send(embed=embed)
 
 
