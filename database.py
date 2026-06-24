@@ -724,7 +724,13 @@ async def fluctuate_all_stocks() -> list[dict]:
                     }
                     lo = band_starts[category]
                     hi = lo + quarter
-                    change = round(_r.uniform(lo, hi) * _r.choice([1, -1]), 2)
+                    direction = _r.choices([1, -1], weights=[60, 40])[0]
+                    change = round(_r.uniform(lo, hi) * direction, 2)
+
+            # ── Penny-stock skyrocket ─────────────────────────────────────
+            # Stocks under $500: 12% chance to rocket up 40–150% this tick
+            if old_price < 500 and change != 0 and _r.random() < 0.12:
+                change = round(old_price * _r.uniform(0.40, 1.50), 2)
 
             # ── Market risks ──────────────────────────────────────────────
             # 5% chance of a sudden crash (25-55% drop) — punishes AFK holding
