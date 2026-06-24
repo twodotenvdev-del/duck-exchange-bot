@@ -558,11 +558,9 @@ async def steal_wallet(thief_id: str, target_id: str) -> dict:
         else:
             total = thief["cash"] + thief["bank"]
             penalty = round(total * fail_pct, 2)
-            wallet_deduct = min(penalty, thief["cash"])
-            bank_deduct = penalty - wallet_deduct
             await db.execute(
-                "UPDATE users SET cash = cash - ?, bank = bank - ? WHERE user_id = ?",
-                (wallet_deduct, bank_deduct, thief_id),
+                "UPDATE users SET cash = cash - ? WHERE user_id = ?",
+                (penalty, thief_id),
             )
             await db.commit()
             async with db.execute("SELECT cash, bank FROM users WHERE user_id = ?", (thief_id,)) as cur:
