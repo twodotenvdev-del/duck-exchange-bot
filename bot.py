@@ -450,15 +450,6 @@ async def leaderboard_cmd(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 
-# ── Admin: /createstock ───────────────────────────────────────────────────────
-
-@bot.tree.command(name="createstock", description="[Admin] Create a new stock.")
-@app_commands.describe(
-    ticker="Short ticker symbol (e.g. DUCK)",
-    name="Full stock name (e.g. Duck Inc.)",
-    starting_price="Starting price per share",
-)
-
 # ── /marketsummary ────────────────────────────────────────────────────
 
 @bot.tree.command(name="marketsummary", description="Show biggest movers in the last 24 hours.")
@@ -1555,8 +1546,6 @@ CRIME_FAIL_MESSAGES = [
 ]
 
 
-@bot.tree.command(name="work", description="Work a job and earn $50–$200 (3 min cooldown).")
-
 # ── /work ──────────────────────────────────────────────────────────────────────────────────
 
 @bot.tree.command(name="work", description="Work a job and earn cash (3 min cooldown).")
@@ -1708,9 +1697,6 @@ async def shop_cmd(interaction: discord.Interaction):
         embed.set_footer(text="Use /buyitem <id> to purchase")
     await interaction.response.send_message(embed=embed)
 
-
-@bot.tree.command(name="buyitem", description="Buy an item from the admin shop.")
-@app_commands.describe(item_id="Item ID from /shop")
 
 @bot.tree.command(name="buyitem", description="Buy an item from the admin shop.")
 @app_commands.describe(item_id="Item ID from /shop")
