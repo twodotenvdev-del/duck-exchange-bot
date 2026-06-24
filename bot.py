@@ -2671,12 +2671,12 @@ async def prefix_roulette(ctx, bet: str = "", amount_str: str = ""):
     result_lines = []
     for p in players:
         mult, _ = roulette_payout(p["bet"], spin)
-        net = round(p["amount"] * mult, 2)
+        winnings = round(p["amount"] * mult, 2)  # multiplier already includes stake on win
         async with aiosqlite.connect(db.DB_PATH) as _db:
-            await _db.execute("UPDATE users SET cash = cash + ? WHERE user_id = ?", (p["amount"] + net, p["user_id"]))
+            await _db.execute("UPDATE users SET cash = cash + ? WHERE user_id = ?", (winnings, p["user_id"]))
             await _db.commit()
-        won = net > 0
-        result_lines.append(f"{'🎉' if won else '💸'} **{p['username']}** bet `{p['bet']}` — {'won' if won else 'lost'} {fmt_money(abs(net))}")
+        won = winnings > 0
+        result_lines.append(f"{'🎉' if won else '💸'} **{p['username']}** bet `{p['bet']}` — {'won' if won else 'lost'} {fmt_money(abs(winnings))}")
     color_name = "🔴 Red" if spin in RED_NUMBERS else ("⬛ Black" if spin != 0 else "🟢 Green")
     result_embed = discord.Embed(
         title=f"🎰 Roulette — Landed on **{spin}** ({color_name})",
