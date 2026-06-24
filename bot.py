@@ -69,6 +69,8 @@ bot = DuckExchangeBot()
 # ── Stock price fluctuation task ───────────────────────────────────────────────
 
 @tasks.loop(minutes=1)
+
+@tasks.loop(minutes=1)
 async def stock_fluctuation():
     results = await db.fluctuate_all_stocks()
     if results:
@@ -92,18 +94,18 @@ async def ensure(interaction: discord.Interaction):
     await db.ensure_user(str(interaction.user.id), interaction.user.display_name)
 
 
-def render_chart_image(prices: list[float], ticker: str, name: str, shareholders: int = 0) -> io.BytesIO:
+def render_chart_image(prices: list[float], ticker: str, name: str, shareholders: int = 0, base_price: float = 0.0) -> io.BytesIO:
     """Render a candlestick-style chart image and return it as a BytesIO PNG."""
     BG      = "#0d1b2a"
     GRID    = "#1a2e42"
     TEXT    = "#dce8f0"
-    DIM     = "#5a7a90"
     GREEN   = "#26a65b"
     RED     = "#e84040"
     NEUTRAL = "#7a8fa0"
+    YELLOW  = "#f1c40f"
+    GRAY    = "#888888"
 
     price_range = max(prices) - min(prices) if max(prices) != min(prices) else prices[0] * 0.1
-    wick_ext = price_range * 0.03
 
     MAX_SLOTS = 40
     fig, ax = plt.subplots(figsize=(14, 4))
@@ -111,7 +113,6 @@ def render_chart_image(prices: list[float], ticker: str, name: str, shareholders
     ax.set_facecolor(BG)
 
     body_width = 0.95
-    wick_lw    = 1.2
 
     for i, price in enumerate(prices):
         if i == 0:
@@ -122,12 +123,12 @@ def render_chart_image(prices: list[float], ticker: str, name: str, shareholders
             prev = prices[i - 1]
             body_lo = min(prev, price)
             body_hi = max(prev, price)
-            color = GREEN if price >= prev else RED
-
-        wick_lo = body_lo - wick_ext
-        wick_hi = body_hi + wick_ext
-
-        ax.plot([i, i], [wick_lo, wick_hi], color=color, linewidth=wick_lw, zorder=2, solid_capstyle="round")
+            if price > prev:
+                color = GREEN
+            elif price < prev:
+                color = RED
+            else:
+                color = YELLOW  # no change = yellow
 
         body_h = max(body_hi - body_lo, price_range * 0.004)
         rect = mpatches.FancyBboxPatch(
@@ -136,8 +137,21 @@ def render_chart_image(prices: list[float], ticker: str, name: str, shareholders
         )
         ax.add_patch(rect)
 
-    ax.set_xlim(-0.5, MAX_SLOTS - 0.5)  # always 40 slots wide
-    ax.set_ylim(min(prices) - wick_ext * 3, max(prices) + wick_ext * 6)
+    ax.set_xlim(-0.5, MAX_SLOTS - 0.5)
+
+    # Always keep base_price visible in y-axis
+    y_min = min(prices) - price_range * 0.05
+    y_max = max(prices) + price_range * 0.1
+    if base_price > 0:
+        y_min = min(y_min, base_price - price_range * 0.02)
+        y_max = max(y_max, base_price + price_range * 0.02)
+    ax.set_ylim(y_min, y_max)
+
+    # Base price reference line
+    if base_price > 0:
+        ax.axhline(y=base_price, color=GRAY, linewidth=1.2, linestyle="--", zorder=1, alpha=0.8)
+        ax.text(MAX_SLOTS - 0.3, base_price, f" Base {fmt_money(base_price)}",
+                color=GRAY, fontsize=7.5, va="center", zorder=4)
 
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"${v:,.2f}"))
     ax.yaxis.grid(True, color=GRID, linewidth=0.6, zorder=0)
@@ -154,7 +168,7 @@ def render_chart_image(prices: list[float], ticker: str, name: str, shareholders
     arrow = "▲" if overall >= 0 else "▼"
     change_color = GREEN if overall >= 0 else RED
 
-    holder_str = f"   ·   👥 {shareholders:,} shareholder{'s' if shareholders != 1 else ''}"
+    holder_str = f"   ·   U0001f465 {shareholders:,} shareholder{'s' if shareholders != 1 else ''}"
     fig.text(
         0.5, 0.912,
         f"${prices[-1]:,.2f}   {arrow} ${abs(overall):,.2f} ({pct:+.1f}%){holder_str}",
@@ -170,9 +184,6 @@ def render_chart_image(prices: list[float], ticker: str, name: str, shareholders
     return buf
 
 
-# ── /stocks ──────────────────────────────────────────────────────────────────
-
-@bot.tree.command(name="stocks", description="List all available stocks and their current prices.")
 async def stocks_cmd(interaction: discord.Interaction):
     await interaction.response.defer()
     rows = await db.get_all_stocks()
@@ -195,6 +206,65 @@ async def stocks_cmd(interaction: discord.Interaction):
 # ── /portfolio ────────────────────────────────────────────────────────────────
 
 @bot.tree.command(name="portfolio", description="View your cash, shares, and total net worth.")
+# ── /stock (single stock detail) ──────────────────────────────────────────────────────
+
+@bot.tree.command(name="stock", description="View detailed info about a specific stock.")
+@app_commands.describe(ticker="Stock ticker symbol (e.g. DUCK)")
+async def stock_cmd(interaction: discord.Interaction, ticker: str):
+    await interaction.response.defer()
+    ticker = ticker.upper()
+    stock = await db.get_stock(ticker)
+    if not stock:
+        await interaction.followup.send(f"❌ No stock with ticker **{ticker}** found.", ephemeral=True)
+        return
+
+    owners = await db.get_owners_of_stock(ticker)
+    changes = await db.get_recent_price_changes(ticker, 5)
+    fee_pct = await db.get_bot_setting("transaction_fee_pct", "2")
+
+    if changes:
+        net = sum(changes)
+        trend = "U0001f4c8 Trending Up" if net > 0 else ("U0001f4c9 Trending Down" if net < 0 else "➡️ Flat")
+    else:
+        trend = "❓ No data yet"
+
+    base_p = stock["base_price"] if stock["base_price"] > 0 else stock["price"]
+    vs_base = stock["price"] - base_p
+    vs_base_pct = (vs_base / base_p * 100) if base_p != 0 else 0.0
+    vs_sign = "+" if vs_base >= 0 else ""
+    floor = round(base_p * 0.05, 2)
+
+    if changes:
+        change_str = "  ".join(
+            ("U0001f7e1 +$0.00" if c == 0 else ("U0001f7e2 +" + fmt_money(c) if c > 0 else "U0001f534 " + fmt_money(c)))
+            for c in changes
+        )
+    else:
+        change_str = "No history"
+
+    embed = discord.Embed(
+        title=f"U0001f4ca {ticker} — {stock['name']}",
+        color=discord.Color.yellow(),
+    )
+    embed.add_field(name="U0001f4b5 Current Price", value=fmt_money(stock["price"]), inline=True)
+    embed.add_field(name="U0001f3c1 Base Price", value=fmt_money(base_p), inline=True)
+    embed.add_field(name="U0001f4d0 vs Base", value=f"{vs_sign}{fmt_money(vs_base)} ({vs_sign}{vs_base_pct:.1f}%)", inline=True)
+    embed.add_field(name="U0001f6e1️ Price Floor", value=fmt_money(floor), inline=True)
+    embed.add_field(name="U0001f465 Shareholders", value=str(len(owners)), inline=True)
+    embed.add_field(name="U0001f4c9 Trend", value=trend, inline=True)
+    embed.add_field(
+        name="⚙️ Volatility",
+        value=f"Change range: ${stock['min_change']:,.0f}–${stock['max_change']:,.0f}\nInterval: every **{stock['fluctuation_minutes']}** min",
+        inline=False,
+    )
+    embed.add_field(name="U0001f550 Last 5 Changes", value=change_str, inline=False)
+    embed.set_footer(text=f"Transaction fee: {fee_pct}% on buy & sell  ·  Use /chart for price history")
+    await interaction.followup.send(embed=embed)
+
+
+# ── /portfolio ────────────────────────────────────────────────────────
+
+@bot.tree.command(name="portfolio", description="View your cash, shares, and total net worth.")
 async def portfolio_cmd(interaction: discord.Interaction):
     await interaction.response.defer()
     await ensure(interaction)
@@ -208,72 +278,68 @@ async def portfolio_cmd(interaction: discord.Interaction):
     net_worth = cash + bank + holdings_value
 
     embed = discord.Embed(
-        title=f"🦆 {interaction.user.display_name}'s Portfolio",
+        title=f"U0001f986 {interaction.user.display_name}'s Portfolio",
         color=discord.Color.green(),
     )
-    embed.add_field(name="👛 Wallet", value=fmt_money(cash), inline=True)
-    embed.add_field(name="🏦 Bank", value=fmt_money(bank), inline=True)
-    embed.add_field(name="📈 Holdings Value", value=fmt_money(holdings_value), inline=True)
-    embed.add_field(name="🏆 Net Worth", value=fmt_money(net_worth), inline=True)
+    embed.add_field(name="U0001f45b Wallet", value=fmt_money(cash), inline=True)
+    embed.add_field(name="U0001f3e6 Bank", value=fmt_money(bank), inline=True)
+    embed.add_field(name="U0001f4c8 Holdings Value", value=fmt_money(holdings_value), inline=True)
+    embed.add_field(name="U0001f3c6 Net Worth", value=fmt_money(net_worth), inline=True)
 
     if holdings:
         lines = []
         for h in holdings:
-            value = h["shares"] * h["price"]
+            current_value = h["shares"] * h["price"]
+            cost_basis = h["shares"] * h["avg_cost"]
+            pl = current_value - cost_basis
+            pl_pct = (pl / cost_basis * 100) if cost_basis > 0 else 0.0
+            pl_sign = "+" if pl >= 0 else ""
+            pl_emoji = "U0001f4c8" if pl >= 0 else "U0001f4c9"
             lines.append(
-                f"**{h['ticker']}** ({h['name']}) — {h['shares']:,} shares @ {fmt_money(h['price'])} = {fmt_money(value)}"
+                f"**{h['ticker']}** ({h['name']}) — {h['shares']:,} shares\n"
+                f"  Bought @ {fmt_money(h['avg_cost'])} avg  ·  Now {fmt_money(h['price'])}\n"
+                f"  Value: {fmt_money(current_value)}  ·  P&L: {pl_emoji} {pl_sign}{fmt_money(pl)} ({pl_sign}{pl_pct:.1f}%)"
             )
-        embed.add_field(name="📊 Shares Owned", value="\n".join(lines), inline=False)
+        embed.add_field(name="U0001f4ca Shares Owned", value="\n\n".join(lines), inline=False)
     else:
-        embed.add_field(name="📊 Shares Owned", value="None — use `/buy` to get started!", inline=False)
+        embed.add_field(name="U0001f4ca Shares Owned", value="None — use `/buy` to get started!", inline=False)
 
     await interaction.followup.send(embed=embed)
 
 
-# ── /buy ──────────────────────────────────────────────────────────────────────
+# ── /buy ────────────────────────────────────────────────────────────────────────────────
 
 @bot.tree.command(name="buy", description="Buy shares of a stock.")
 @app_commands.describe(ticker="Stock ticker symbol (e.g. DUCK)", amount="Number of shares to buy")
 async def buy_cmd(interaction: discord.Interaction, ticker: str, amount: int):
     await interaction.response.defer()
     await ensure(interaction)
-
     if amount <= 0:
         await interaction.followup.send("❌ Amount must be a positive number.")
         return
-
     ticker = ticker.upper()
     stock = await db.get_stock(ticker)
     if not stock:
         await interaction.followup.send(f"❌ No stock with ticker **{ticker}** found. Use `/stocks` to see available stocks.")
         return
-
     cost = amount * stock["price"]
-    result = await db.buy_stock(
-        str(interaction.user.id),
-        ticker,
-        amount,
-        stock["price"]
-    )
-
+    result = await db.buy_stock(str(interaction.user.id), ticker, amount, stock["price"])
     if result == "too_many_shares":
         holdings = await db.get_user_holdings(str(interaction.user.id))
         owned = sum(h["shares"] for h in holdings)
-
         await interaction.followup.send(
             f"❌ You can only own **30 total shares**.\n"
-            f"You currently own: **{owned}/30**\n"
-            f"Trying to buy: **{amount}**"
+            f"You currently own: **{owned}/30**\nTrying to buy: **{amount}**"
         )
         return
-
     if result == "insufficient_funds":
+        fee_pct = await db.get_bot_setting("transaction_fee_pct", "2")
         await interaction.followup.send(
-            "❌ You don't have enough cash."
+            f"❌ You don't have enough cash.\n"
+            f"_(Note: a **{fee_pct}% transaction fee** is added to the total cost)_"
         )
         return
-
-    new_price = result
+    new_price, fee = result
     user = await db.get_user(str(interaction.user.id))
     embed = discord.Embed(
         title="✅ Purchase Successful",
@@ -281,52 +347,45 @@ async def buy_cmd(interaction: discord.Interaction, ticker: str, amount: int):
         description=(
             f"You bought **{amount:,} shares** of **{ticker}** ({stock['name']}) "
             f"at {fmt_money(stock['price'])} each.\n"
-            f"**Total cost:** {fmt_money(cost)}\n"
+            f"**Base cost:** {fmt_money(cost)}\n"
+            f"**Transaction fee (2%):** -{fmt_money(fee)}\n"
+            f"**Total spent:** {fmt_money(cost + fee)}\n"
             f"**Remaining cash:** {fmt_money(user['cash'])}\n"
-            f"**New price:** {fmt_money(stock['price'])} → 📈 {fmt_money(new_price)} (+{fmt_money(amount * db.PRICE_IMPACT_BUY)})"
+            f"**New market price:** U0001f4c8 {fmt_money(new_price)}"
         ),
     )
     await interaction.followup.send(embed=embed)
 
 
-# ── /sell ─────────────────────────────────────────────────────────────────────
+# ── /sell ──────────────────────────────────────────────────────────────────────────────
 
 @bot.tree.command(name="sell", description="Sell shares of a stock.")
 @app_commands.describe(ticker="Stock ticker symbol (e.g. DUCK)", amount="Number of shares to sell")
 async def sell_cmd(interaction: discord.Interaction, ticker: str, amount: int):
     await interaction.response.defer()
     await ensure(interaction)
-
     if amount <= 0:
         await interaction.followup.send("❌ Amount must be a positive number.")
         return
-
     ticker = ticker.upper()
     stock = await db.get_stock(ticker)
     if not stock:
         await interaction.followup.send(f"❌ No stock with ticker **{ticker}** found. Use `/stocks` to see available stocks.")
         return
-
-    proceeds = amount * stock["price"]
     result = await db.sell_stock(str(interaction.user.id), ticker, amount, stock["price"])
-
     if result == "cooldown":
-        await interaction.followup.send(
-            "⏳ You must wait **2 minutes** before selling stock again."
-        )
+        await interaction.followup.send("⏳ You must wait **2 minutes** after buying before selling.")
         return
-
     if result == "insufficient_shares":
         holding = await db.get_holding(str(interaction.user.id), ticker)
         owned = holding["shares"] if holding else 0
         await interaction.followup.send(
             f"❌ You don't have enough shares of **{ticker}**.\n"
-            f"**Requested:** {amount:,}\n"
-            f"**You own:** {owned:,}"
+            f"**Requested:** {amount:,}\n**You own:** {owned:,}"
         )
         return
-
-    new_price = result
+    new_price, net_proceeds, fee = result
+    gross = amount * stock["price"]
     user = await db.get_user(str(interaction.user.id))
     embed = discord.Embed(
         title="✅ Sale Successful",
@@ -334,45 +393,42 @@ async def sell_cmd(interaction: discord.Interaction, ticker: str, amount: int):
         description=(
             f"You sold **{amount:,} shares** of **{ticker}** ({stock['name']}) "
             f"at {fmt_money(stock['price'])} each.\n"
-            f"**Proceeds:** {fmt_money(proceeds)}\n"
+            f"**Gross proceeds:** {fmt_money(gross)}\n"
+            f"**Transaction fee (2%):** -{fmt_money(fee)}\n"
+            f"**Net proceeds:** {fmt_money(net_proceeds)}\n"
             f"**New cash balance:** {fmt_money(user['cash'])}\n"
-            f"**New price:** {fmt_money(stock['price'])} → 📉 {fmt_money(new_price)} (-{fmt_money(amount * db.PRICE_IMPACT_SELL)})"
+            f"**New market price:** U0001f4c9 {fmt_money(new_price)}"
         ),
     )
     await interaction.followup.send(embed=embed)
 
 
-# ── /chart ────────────────────────────────────────────────────────────────────
+# ── /chart ──────────────────────────────────────────────────────────────────────────
 
 @bot.tree.command(name="chart", description="Show the price history chart for a stock.")
 @app_commands.describe(ticker="Stock ticker symbol (e.g. DUCK)")
 async def chart_cmd(interaction: discord.Interaction, ticker: str):
     await interaction.response.defer()
-
     ticker = ticker.upper()
     stock = await db.get_stock(ticker)
     if not stock:
-        await interaction.followup.send(f"❌ No stock with ticker **{ticker}** found. Use `/stocks` to see available stocks.")
+        await interaction.followup.send(f"❌ No stock with ticker **{ticker}** found.")
         return
-
     history = await db.get_price_history(ticker, limit=40)
     if len(history) < 2:
         await interaction.followup.send(
-            f"📊 **{ticker}** — {stock['name']}\n"
+            f"U0001f4ca **{ticker}** — {stock['name']}\n"
             f"Current price: {fmt_money(stock['price'])}\n\n"
-            f"Not enough price history yet. Admins need to change the price at least once to generate a chart."
+            f"Not enough price history yet."
         )
         return
-
     prices = [row["price"] for row in history]
     owners = await db.get_owners_of_stock(ticker)
-    buf = render_chart_image(prices, ticker, stock["name"], shareholders=len(owners))
+    base_price = stock["base_price"] if stock["base_price"] > 0 else prices[0]
+    buf = render_chart_image(prices, ticker, stock["name"], shareholders=len(owners), base_price=base_price)
     await interaction.followup.send(file=discord.File(buf, filename=f"{ticker}_chart.png"))
 
 
-# ── /leaderboard ──────────────────────────────────────────────────────────────
-
-@bot.tree.command(name="leaderboard", description="See the richest users in Duck Exchange.")
 async def leaderboard_cmd(interaction: discord.Interaction):
     await interaction.response.defer()
     rows = await db.get_leaderboard(10)
@@ -403,43 +459,156 @@ async def leaderboard_cmd(interaction: discord.Interaction):
     name="Full stock name (e.g. Duck Inc.)",
     starting_price="Starting price per share",
 )
+
+# ── /marketsummary ────────────────────────────────────────────────────
+
+@bot.tree.command(name="marketsummary", description="Show biggest movers in the last 24 hours.")
+async def marketsummary_cmd(interaction: discord.Interaction):
+    await interaction.response.defer()
+    rows = await db.get_market_summary()
+    if not rows:
+        await interaction.followup.send("No stocks yet! Use `/createstock` to add one.")
+        return
+    embed = discord.Embed(title="U0001f4ca Market Summary — 24h Movers", color=discord.Color.gold())
+    lines = []
+    for row in rows:
+        arrow = "U0001f4c8" if row["change"] > 0 else ("U0001f4c9" if row["change"] < 0 else "➡️")
+        sign = "+" if row["change"] >= 0 else ""
+        lines.append(
+            f"{arrow} **{row['ticker']}** — {fmt_money(row['price'])}  "
+            f"({sign}{fmt_money(row['change'])}, {sign}{row['pct']}%)"
+        )
+    embed.description = "\n".join(lines) if lines else "No data yet."
+    embed.set_footer(text="Changes measured over the last 24 hours")
+    await interaction.followup.send(embed=embed)
+
+
+# ── Admin: /createstock ───────────────────────────────────────────────────────────────────
+
+@bot.tree.command(name="createstock", description="[Admin] Create a new stock.")
+@app_commands.describe(
+    ticker="Short ticker symbol (e.g. DUCK)",
+    name="Full stock name (e.g. Duck Inc.)",
+    starting_price="Starting price per share",
+    min_change="Min change magnitude per fluctuation (default 0)",
+    max_change="Max change magnitude per fluctuation (default 300)",
+    fluctuation_minutes="How often this stock fluctuates in minutes (default 1)",
+)
 async def createstock_cmd(
     interaction: discord.Interaction,
     ticker: str,
     name: str,
     starting_price: float,
+    min_change: float = 0.0,
+    max_change: float = 300.0,
+    fluctuation_minutes: int = 1,
 ):
     if not is_admin(interaction):
         await interaction.response.send_message("❌ Only server administrators can create stocks.", ephemeral=True)
         return
-
     if starting_price <= 0:
         await interaction.response.send_message("❌ Starting price must be greater than 0.", ephemeral=True)
         return
-
+    if min_change < 0 or max_change < 0:
+        await interaction.response.send_message("❌ Change values must be non-negative.", ephemeral=True)
+        return
+    if min_change > max_change:
+        await interaction.response.send_message("❌ min_change cannot exceed max_change.", ephemeral=True)
+        return
+    if fluctuation_minutes < 1:
+        await interaction.response.send_message("❌ Fluctuation interval must be at least 1 minute.", ephemeral=True)
+        return
     ticker = ticker.upper()
-    success = await db.create_stock(ticker, name, starting_price)
+    success = await db.create_stock(ticker, name, starting_price, min_change, max_change, fluctuation_minutes)
     if not success:
         await interaction.response.send_message(
             f"❌ A stock with ticker **{ticker}** already exists.", ephemeral=True
         )
         return
-
     embed = discord.Embed(
         title="✅ Stock Created",
         color=discord.Color.green(),
         description=(
             f"**{ticker}** — {name}\n"
-            f"**Starting price:** {fmt_money(starting_price)}"
+            f"**Starting price:** {fmt_money(starting_price)}\n"
+            f"**Change range:** ${min_change:,.0f}–${max_change:,.0f}\n"
+            f"**Fluctuates every:** {fluctuation_minutes} min"
         ),
     )
     await interaction.response.send_message(embed=embed)
 
 
-# ── Admin: /setprice ──────────────────────────────────────────────────────────
+# ── Admin: /editstock ────────────────────────────────────────────────────────────────────
 
-@bot.tree.command(name="setprice", description="[Admin] Set the price of a stock.")
-@app_commands.describe(ticker="Stock ticker symbol", new_price="New price per share")
+@bot.tree.command(name="editstock", description="[Admin] Edit a stock's name or volatility settings.")
+@app_commands.describe(
+    ticker="Stock ticker to edit",
+    name="New name (leave blank to keep)",
+    min_change="New minimum change magnitude (leave blank to keep)",
+    max_change="New maximum change magnitude (leave blank to keep)",
+    fluctuation_minutes="New fluctuation interval in minutes (leave blank to keep)",
+)
+async def editstock_cmd(
+    interaction: discord.Interaction,
+    ticker: str,
+    name: str = None,
+    min_change: float = None,
+    max_change: float = None,
+    fluctuation_minutes: int = None,
+):
+    if not is_admin(interaction):
+        await interaction.response.send_message("❌ Only server administrators can edit stocks.", ephemeral=True)
+        return
+    ticker = ticker.upper()
+    stock = await db.get_stock(ticker)
+    if not stock:
+        await interaction.response.send_message(f"❌ No stock with ticker **{ticker}** found.", ephemeral=True)
+        return
+    updates = {}
+    if name is not None:
+        updates["name"] = name
+    if min_change is not None:
+        if min_change < 0:
+            await interaction.response.send_message("❌ min_change must be non-negative.", ephemeral=True)
+            return
+        updates["min_change"] = min_change
+    if max_change is not None:
+        if max_change < 0:
+            await interaction.response.send_message("❌ max_change must be non-negative.", ephemeral=True)
+            return
+        updates["max_change"] = max_change
+    if fluctuation_minutes is not None:
+        if fluctuation_minutes < 1:
+            await interaction.response.send_message("❌ Interval must be at least 1 minute.", ephemeral=True)
+            return
+        updates["fluctuation_minutes"] = fluctuation_minutes
+    if not updates:
+        await interaction.response.send_message("❌ Provide at least one field to update.", ephemeral=True)
+        return
+    eff_min = updates.get("min_change", stock["min_change"])
+    eff_max = updates.get("max_change", stock["max_change"])
+    if eff_min > eff_max:
+        await interaction.response.send_message("❌ min_change cannot exceed max_change.", ephemeral=True)
+        return
+    ok = await db.edit_stock(ticker, **updates)
+    if not ok:
+        await interaction.response.send_message("❌ Failed to update stock.", ephemeral=True)
+        return
+    updated = await db.get_stock(ticker)
+    embed = discord.Embed(
+        title=f"✏️ Stock Updated: {ticker}",
+        color=discord.Color.gold(),
+        description=(
+            f"**{updated['ticker']}** — {updated['name']}\n"
+            f"**Price:** {fmt_money(updated['price'])}  ·  **Base:** {fmt_money(updated['base_price'])}\n"
+            f"**Change range:** ${updated['min_change']:,.0f}–${updated['max_change']:,.0f}\n"
+            f"**Fluctuates every:** {updated['fluctuation_minutes']} min"
+        ),
+    )
+    embed.set_footer(text="Updated: " + ", ".join(updates.keys()))
+    await interaction.response.send_message(embed=embed)
+
+
 async def setprice_cmd(interaction: discord.Interaction, ticker: str, new_price: float):
     if not is_admin(interaction):
         await interaction.response.send_message("❌ Only server administrators can change stock prices.", ephemeral=True)
@@ -688,6 +857,7 @@ async def resolve_roulette(channel_id: int) -> None:
     amount="Amount of cash to bet",
     bet="What to bet on: red, black, odd, even, 1-18, 19-36, or a number (0–36)",
 )
+
 async def roulette_cmd(interaction: discord.Interaction, amount: float, bet: str):
     await ensure(interaction)
     channel_id = interaction.channel_id
@@ -906,6 +1076,7 @@ async def withdraw_cmd(interaction: discord.Interaction, amount: float):
 
 @bot.tree.command(name="transfer", description="Send wallet cash to another player.")
 @app_commands.describe(user="Who to send to", amount="Amount to transfer")
+
 async def transfer_cmd(interaction: discord.Interaction, user: discord.Member, amount: float):
     await ensure(interaction)
     if user.id == interaction.user.id:
@@ -1015,6 +1186,7 @@ async def claim_cmd(interaction: discord.Interaction):
     app_commands.Choice(name="Heads", value="heads"),
     app_commands.Choice(name="Tails", value="tails"),
 ])
+
 async def flip_cmd(interaction: discord.Interaction, amount: float, choice: str):
     await ensure(interaction)
     if amount <= 0:
@@ -1266,6 +1438,7 @@ def build_bj_embed(game: dict, finished: bool = False) -> discord.Embed:
 
 @bot.tree.command(name="blackjack", description="Play blackjack against the dealer!")
 @app_commands.describe(amount="Amount to bet from your wallet")
+
 async def blackjack_cmd(interaction: discord.Interaction, amount: float):
     await ensure(interaction)
     if amount <= 0:
@@ -1325,6 +1498,7 @@ async def blackjack_cmd(interaction: discord.Interaction, amount: float):
 
 # ── /work ─────────────────────────────────────────────────────────────────────
 
+
 WORK_MESSAGES = [
     "You worked a 9-to-5 at McDonald's flipping burgers",
     "You delivered pizzas in a thunderstorm on a bicycle",
@@ -1383,6 +1557,10 @@ CRIME_FAIL_MESSAGES = [
 
 
 @bot.tree.command(name="work", description="Work a job and earn $50–$200 (3 min cooldown).")
+
+# ── /work ──────────────────────────────────────────────────────────────────────────────────
+
+@bot.tree.command(name="work", description="Work a job and earn cash (3 min cooldown).")
 async def work_cmd(interaction: discord.Interaction):
     await ensure(interaction)
     result = await db.do_work(str(interaction.user.id))
@@ -1393,22 +1571,24 @@ async def work_cmd(interaction: discord.Interaction):
             f"⏳ You're too tired to work! Rest for **{m}m {s}s**.", ephemeral=True
         )
         return
+    work_min = await db.get_bot_setting("work_min", "50")
+    work_max = await db.get_bot_setting("work_max", "200")
     msg = random.choice(WORK_MESSAGES)
     embed = discord.Embed(
-        title="💼 Work Complete",
+        title="U0001f4bc Work Complete",
         color=discord.Color.blue(),
         description=(
             f"{msg} and earned **{fmt_money(result['earned'])}**!\n\n"
-            f"👛 New wallet: {fmt_money(result['new_cash'])}"
+            f"U0001f45b New wallet: {fmt_money(result['new_cash'])}"
         ),
     )
-    embed.set_footer(text="Cooldown: 3 minutes")
+    embed.set_footer(text=f"Cooldown: 3 min  ·  Payout: ${work_min}–${work_max}")
     await interaction.response.send_message(embed=embed)
 
 
-# ── /crime ────────────────────────────────────────────────────────────────────
+# ── /crime ──────────────────────────────────────────────────────────────────────────────
 
-@bot.tree.command(name="crime", description="Commit a crime for $100–$500 (5 min cooldown, 50% fail = -30% wealth).")
+@bot.tree.command(name="crime", description="Commit a crime (5 min cooldown, 50% fail chance).")
 async def crime_cmd(interaction: discord.Interaction):
     await ensure(interaction)
     result = await db.do_crime(str(interaction.user.id))
@@ -1419,34 +1599,98 @@ async def crime_cmd(interaction: discord.Interaction):
             f"⏳ Laying low after last time. Try again in **{m}m {s}s**.", ephemeral=True
         )
         return
+    crime_min = await db.get_bot_setting("crime_min", "100")
+    crime_max = await db.get_bot_setting("crime_max", "500")
+    crime_fail_pct = await db.get_bot_setting("crime_fail_pct", "30")
     if result["success"]:
         msg = random.choice(CRIME_SUCCESS_MESSAGES)
         embed = discord.Embed(
-            title="🦹 Crime Successful",
+            title="U0001f9b9 Crime Successful",
             color=discord.Color.green(),
             description=(
                 f"{msg} and pocketed **{fmt_money(result['earned'])}**!\n\n"
-                f"👛 New wallet: {fmt_money(result['new_cash'])}"
+                f"U0001f45b New wallet: {fmt_money(result['new_cash'])}"
             ),
         )
     else:
         msg = random.choice(CRIME_FAIL_MESSAGES)
         embed = discord.Embed(
-            title="🚔 Busted!",
+            title="U0001f694 Busted!",
             color=discord.Color.red(),
             description=(
                 f"{msg}\n\n"
-                f"💸 You lost **{fmt_money(result['penalty'])}** (30% of your wealth) in fines!\n"
-                f"👛 Wallet: {fmt_money(result['new_cash'])}  |  🏦 Bank: {fmt_money(result['new_bank'])}"
+                f"U0001f4b8 You lost **{fmt_money(result['penalty'])}** ({crime_fail_pct}% of your wealth) in fines!\n"
+                f"U0001f45b Wallet: {fmt_money(result['new_cash'])}  |  U0001f3e6 Bank: {fmt_money(result['new_bank'])}"
             ),
         )
-    embed.set_footer(text="Cooldown: 5 minutes")
+    embed.set_footer(text=f"Cooldown: 5 min  ·  Payout: ${crime_min}–${crime_max}  ·  Fail: {crime_fail_pct}% wealth")
     await interaction.response.send_message(embed=embed)
 
 
-# ── /shop ─────────────────────────────────────────────────────────────────────
+# ── Admin: /setconfig ───────────────────────────────────────────────────────────────────
 
-@bot.tree.command(name="shop", description="Browse the admin shop and buy items.")
+VALID_CONFIG_KEYS = {
+    "work_min": "Minimum work payout ($)",
+    "work_max": "Maximum work payout ($)",
+    "crime_min": "Minimum crime payout ($)",
+    "crime_max": "Maximum crime payout ($)",
+    "crime_fail_pct": "% of wealth lost on crime fail (e.g. 30 = 30%)",
+    "steal_fail_pct": "% of wealth lost on failed steal (e.g. 10 = 10%)",
+    "steal_success_rate": "% chance steal succeeds (e.g. 30 = 30%)",
+    "transaction_fee_pct": "% fee on stock buy/sell (e.g. 2 = 2%)",
+}
+
+
+@bot.tree.command(name="setconfig", description="[Admin] Adjust server economy settings.")
+@app_commands.describe(
+    key="Setting to change (see /config for all keys)",
+    value="New numeric value",
+)
+async def setconfig_cmd(interaction: discord.Interaction, key: str, value: str):
+    if not is_admin(interaction):
+        await interaction.response.send_message("❌ Admins only.", ephemeral=True)
+        return
+    if key not in VALID_CONFIG_KEYS:
+        keys_list = "\n".join(f"• `{k}` — {v}" for k, v in VALID_CONFIG_KEYS.items())
+        await interaction.response.send_message(
+            f"❌ Unknown key **{key}**.\n\n**Valid keys:**\n{keys_list}", ephemeral=True
+        )
+        return
+    try:
+        num = float(value)
+        if num < 0:
+            raise ValueError
+    except ValueError:
+        await interaction.response.send_message("❌ Value must be a non-negative number.", ephemeral=True)
+        return
+    await db.set_bot_setting(key, str(num))
+    embed = discord.Embed(
+        title="⚙️ Config Updated",
+        color=discord.Color.gold(),
+        description=f"**{key}** set to **{value}**\n_{VALID_CONFIG_KEYS[key]}_",
+    )
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="config", description="[Admin] View all current economy settings.")
+async def config_cmd(interaction: discord.Interaction):
+    if not is_admin(interaction):
+        await interaction.response.send_message("❌ Admins only.", ephemeral=True)
+        return
+    settings = await db.get_all_settings()
+    lines = []
+    for k, desc in VALID_CONFIG_KEYS.items():
+        val = settings.get(k, "?")
+        lines.append(f"• **{k}** = `{val}` — {desc}")
+    embed = discord.Embed(
+        title="⚙️ Economy Config",
+        color=discord.Color.blurple(),
+        description="\n".join(lines),
+    )
+    embed.set_footer(text="Use /setconfig <key> <value> to change any setting")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 async def shop_cmd(interaction: discord.Interaction):
     await ensure(interaction)
     items = await db.get_shop_items()
@@ -1468,6 +1712,9 @@ async def shop_cmd(interaction: discord.Interaction):
 
 @bot.tree.command(name="buyitem", description="Buy an item from the admin shop.")
 @app_commands.describe(item_id="Item ID from /shop")
+
+@bot.tree.command(name="buyitem", description="Buy an item from the admin shop.")
+@app_commands.describe(item_id="Item ID from /shop")
 async def buyitem_cmd(interaction: discord.Interaction, item_id: int):
     await ensure(interaction)
     result = await db.buy_shop_item(str(interaction.user.id), item_id)
@@ -1485,49 +1732,84 @@ async def buyitem_cmd(interaction: discord.Interaction, item_id: int):
             ephemeral=True,
         )
         return
-    item = await db.get_shop_item(item_id)
-    # item may be None now if it was last in stock, fetch before buying
-    embed = discord.Embed(
-        title="✅ Purchase Successful",
-        color=discord.Color.green(),
-        description=f"You bought an item from the shop! Check `/inventory` to see it.",
-    )
+    item_info = result
+    if item_info["role_id"]:
+        role = interaction.guild.get_role(int(item_info["role_id"])) if interaction.guild else None
+        if role:
+            try:
+                await interaction.user.add_roles(role, reason="Purchased from shop")
+                embed = discord.Embed(
+                    title="✅ Purchase Successful",
+                    color=discord.Color.green(),
+                    description=(
+                        f"You bought **{item_info['name']}** and received the **{role.name}** role!\n"
+                        f"_{item_info['description']}_"
+                    ),
+                )
+            except discord.Forbidden:
+                embed = discord.Embed(
+                    title="⚠️ Purchase Successful (Role Error)",
+                    color=discord.Color.orange(),
+                    description=(
+                        f"You bought **{item_info['name']}** but the bot couldn't assign the role.\n"
+                        f"Please contact an admin."
+                    ),
+                )
+        else:
+            embed = discord.Embed(
+                title="⚠️ Purchase Successful (Role Not Found)",
+                color=discord.Color.orange(),
+                description=f"You bought **{item_info['name']}** but the linked role no longer exists. Contact an admin.",
+            )
+    else:
+        embed = discord.Embed(
+            title="✅ Purchase Successful",
+            color=discord.Color.green(),
+            description="You bought an item! Check `/inventory` to see it.",
+        )
     await interaction.response.send_message(embed=embed)
 
 
 @bot.tree.command(name="createitem", description="[Admin] Add an item to the shop.")
-@app_commands.describe(name="Item name", price="Price in cash", description="Item description", stock="Stock amount (-1 = unlimited)")
-async def createitem_cmd(interaction: discord.Interaction, name: str, price: float, description: str = "", stock: int = -1):
+@app_commands.describe(
+    name="Item name",
+    price="Price in cash",
+    description="Item description",
+    stock="Stock amount (-1 = unlimited)",
+    role_id="Discord Role ID to grant on purchase (optional, replaces inventory reward)",
+)
+async def createitem_cmd(
+    interaction: discord.Interaction,
+    name: str,
+    price: float,
+    description: str = "",
+    stock: int = -1,
+    role_id: str = None,
+):
     if not is_admin(interaction):
         await interaction.response.send_message("❌ Admins only.", ephemeral=True)
         return
     if price <= 0:
         await interaction.response.send_message("❌ Price must be positive.", ephemeral=True)
         return
-    item_id = await db.create_shop_item(name, description, price, stock)
+    if role_id is not None:
+        if not role_id.isdigit():
+            await interaction.response.send_message("❌ role_id must be a numeric Discord Role ID.", ephemeral=True)
+            return
+        if interaction.guild and not interaction.guild.get_role(int(role_id)):
+            await interaction.response.send_message(f"❌ No role with ID {role_id} found in this server.", ephemeral=True)
+            return
+    item_id = await db.create_shop_item(name, description, price, stock, role_id)
     stock_str = "Unlimited" if stock == -1 else str(stock)
+    role_str = f"  ·  U0001f3ad Grants role <@&{role_id}>" if role_id else ""
     embed = discord.Embed(
         title="✅ Item Created",
         color=discord.Color.green(),
-        description=f"**[#{item_id}] {name}**\n{description}\n\nPrice: {fmt_money(price)}  |  Stock: {stock_str}",
+        description=f"**[#{item_id}] {name}**\n{description}\n\nPrice: {fmt_money(price)}  |  Stock: {stock_str}{role_str}",
     )
     await interaction.response.send_message(embed=embed)
 
 
-@bot.tree.command(name="deleteitem", description="[Admin] Remove an item from the shop.")
-@app_commands.describe(item_id="Item ID to delete")
-async def deleteitem_cmd(interaction: discord.Interaction, item_id: int):
-    if not is_admin(interaction):
-        await interaction.response.send_message("❌ Admins only.", ephemeral=True)
-        return
-    ok = await db.delete_shop_item(item_id)
-    if not ok:
-        await interaction.response.send_message(f"❌ No item with ID **#{item_id}** found.", ephemeral=True)
-        return
-    await interaction.response.send_message(f"🗑️ Item **#{item_id}** deleted from the shop.", ephemeral=True)
-
-
-@bot.tree.command(name="edititem", description="[Admin] Edit a shop item's name, price, stock, or description.")
 @app_commands.describe(
     item_id="Item ID to edit",
     name="New name (leave blank to keep)",
@@ -1584,6 +1866,7 @@ async def edititem_cmd(
 # ── /market ───────────────────────────────────────────────────────────────────
 
 @bot.tree.command(name="market", description="Browse the community marketplace.")
+
 async def market_cmd(interaction: discord.Interaction):
     await ensure(interaction)
     listings = await db.get_listings()
@@ -1729,6 +2012,7 @@ async def delistitem_cmd(interaction: discord.Interaction, listing_id: int):
 # ── /inventory ────────────────────────────────────────────────────────────────
 
 @bot.tree.command(name="inventory", description="View all items you own.")
+
 async def inventory_cmd(interaction: discord.Interaction):
     await ensure(interaction)
     items = await db.get_user_items(str(interaction.user.id))
