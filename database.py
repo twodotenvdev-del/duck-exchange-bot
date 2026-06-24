@@ -584,6 +584,18 @@ async def admin_give_cash(target_id: str, amount: float) -> bool:
         await db.commit()
     return True
 
+  async def admin_give_bank(target_id: str, amount: float) -> bool:
+      async with aiosqlite.connect(DB_PATH) as db:
+          async with db.execute("SELECT user_id FROM users WHERE user_id = ?", (target_id,)) as cur:
+              if not await cur.fetchone():
+                  return False
+          await db.execute(
+              "UPDATE users SET bank = bank + ? WHERE user_id = ?", (amount, target_id)
+          )
+          await db.commit()
+          return True
+  
+
 
 async def admin_remove_cash(target_id: str, amount: float) -> str:
     """Returns 'ok', 'user_not_found', or 'insufficient_funds'."""
