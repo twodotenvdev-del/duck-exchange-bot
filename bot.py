@@ -68,6 +68,8 @@ class DuckExchangeBot(commands.Bot):
             dividend_payout.start()
         if not holding_tax.is_running():
             holding_tax.start()
+        if not loan_enforcer.is_running():
+            loan_enforcer.start()
 
 
 bot = DuckExchangeBot()
@@ -122,6 +124,13 @@ async def holding_tax():
     count = await db.pay_holding_tax()
     if count:
         print(f"[Holding Tax] 1% tax collected from {count} holders")
+
+
+@tasks.loop(minutes=1)
+async def loan_enforcer():
+    collected = await db.collect_overdue_loans()
+    for entry in collected:
+        print(f"[Loan] Auto-collected overdue loan of {fmt_money(entry['amount'])} from {entry['username']}")
 
 
 
