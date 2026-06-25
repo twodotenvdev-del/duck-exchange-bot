@@ -143,7 +143,7 @@ def render_chart_image(prices: list[float], ticker: str, name: str, shareholders
         )
         ax.add_patch(rect)
 
-    ax.set_xlim(-0.5, MAX_SLOTS - 0.5)
+    ax.set_xlim(-0.5, max(len(prices), 1) - 0.5)
 
     # Always keep base_price visible in y-axis
     y_min = min(prices) - price_range * 0.05
