@@ -119,6 +119,8 @@ async def init_db():
             "ALTER TABLE stocks ADD COLUMN last_fluctuated TEXT DEFAULT NULL",
             "ALTER TABLE holdings ADD COLUMN avg_cost REAL NOT NULL DEFAULT 0.0",
             "ALTER TABLE shop_items ADD COLUMN role_id TEXT DEFAULT NULL",
+            "ALTER TABLE users ADD COLUMN loan_amount REAL NOT NULL DEFAULT 0.0",
+            "ALTER TABLE users ADD COLUMN loan_due TEXT DEFAULT NULL",
         ]
         for stmt in migrations:
             try:
@@ -128,6 +130,7 @@ async def init_db():
         # Fix base_price for existing stocks that have 0 base_price (set = current price)
         await db.execute("UPDATE stocks SET base_price = price WHERE base_price = 0.0")
         await db.commit()
+        await _seed_default_stocks(db)
 
 
 # ── Settings ───────────────────────────────────────────────────────────────────
@@ -1080,3 +1083,129 @@ async def global_dep(amount: float) -> int:
         async with db.execute("SELECT COUNT(*) FROM stocks") as cur:
             row = await cur.fetchone()
             return row[0] if row else 0
+
+
+
+  # ── Bank interest (called every 2 min by bot task) ─────────────────────────
+
+  async def pay_bank_interest() -> int:
+      """Add 1% to every user's bank balance. Returns number of users updated."""
+      async with aiosqlite.connect(DB_PATH) as db:
+          await db.execute("UPDATE users SET bank = ROUND(bank * 1.01, 2) WHERE bank > 0.0")
+          await db.commit()
+          async with db.execute("SELECT changes()") as cur:
+              row = await cur.fetchone()
+              return row[0] if row else 0
+
+
+  # ── Stock dividends (called every 30 min by bot task) ─────────────────────
+
+  async def pay_dividends() -> int:
+      """Pay each holding 0.10% of share value as cash. Returns payments made."""
+      async with aiosqlite.connect(DB_PATH) as db:
+          db.row_factory = aiosqlite.Row
+          async with db.execute("""
+              SELECT h.user_id, h.shares, s.price
+              FROM holdings h JOIN stocks s ON h.ticker = s.ticker
+              WHERE h.shares > 0
+          """) as cur:
+              rows = await cur.fetchall()
+          count = 0
+          for row in rows:
+              dividend = round(row["shares"] * row["price"] * 0.001, 2)
+              if dividend > 0:
+                  await db.execute(
+                      "UPDATE users SET cash = cash + ? WHERE user_id = ?",
+                      (dividend, row["user_id"]),
+                  )
+                  count += 1
+          await db.commit()
+          return count
+
+
+  # ── Loan system ────────────────────────────────────────────────────────────
+
+  async def take_loan(user_id: str, amount: float) -> dict:
+      """Borrow up to bank balance. Owe 125% back. Due in 24h."""
+      from datetime import datetime, timedelta, timezone
+      async with aiosqlite.connect(DB_PATH) as db:
+          db.row_factory = aiosqlite.Row
+          async with db.execute("SELECT cash, bank, loan_amount FROM users WHERE user_id = ?", (user_id,)) as cur:
+              user = await cur.fetchone()
+          if not user:
+              return {"error": "user_not_found"}
+          if user["loan_amount"] > 0:
+              return {"error": "has_loan", "owed": user["loan_amount"]}
+          if amount <= 0:
+              return {"error": "invalid_amount"}
+          if amount > user["bank"]:
+              return {"error": "exceeds_limit", "max": user["bank"]}
+          owed = round(amount * 1.25, 2)
+          due = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+          await db.execute(
+              "UPDATE users SET cash = cash + ?, loan_amount = ?, loan_due = ? WHERE user_id = ?",
+              (amount, owed, due, user_id),
+          )
+          await db.commit()
+          async with db.execute("SELECT cash FROM users WHERE user_id = ?", (user_id,)) as cur:
+              updated = await cur.fetchone()
+          return {"ok": True, "borrowed": amount, "owed": owed, "due": due, "new_cash": updated["cash"]}
+
+
+  async def repay_loan(user_id: str, amount: float) -> dict:
+      """Repay part or all of a loan from wallet."""
+      async with aiosqlite.connect(DB_PATH) as db:
+          db.row_factory = aiosqlite.Row
+          async with db.execute("SELECT cash, loan_amount, loan_due FROM users WHERE user_id = ?", (user_id,)) as cur:
+              user = await cur.fetchone()
+          if not user:
+              return {"error": "user_not_found"}
+          if not user["loan_amount"] or user["loan_amount"] <= 0:
+              return {"error": "no_loan"}
+          pay = min(round(amount, 2), user["loan_amount"])
+          if user["cash"] < pay:
+              return {"error": "insufficient_funds", "has": user["cash"]}
+          new_loan = round(user["loan_amount"] - pay, 2)
+          await db.execute(
+              "UPDATE users SET cash = cash - ?, loan_amount = ?, loan_due = ? WHERE user_id = ?",
+              (pay, new_loan, None if new_loan <= 0 else user["loan_due"], user_id),
+          )
+          await db.commit()
+          async with db.execute("SELECT cash, loan_amount FROM users WHERE user_id = ?", (user_id,)) as cur:
+              updated = await cur.fetchone()
+          return {"ok": True, "paid": pay, "remaining": updated["loan_amount"], "new_cash": updated["cash"]}
+
+
+  # ── Default stock seeding ──────────────────────────────────────────────────
+
+  async def _seed_default_stocks(db) -> bool:
+      """Insert default stocks if the stocks table is empty. Returns True if seeded."""
+      async with db.execute("SELECT COUNT(*) FROM stocks") as cur:
+          count = (await cur.fetchone())[0]
+      if count > 0:
+          return False
+      defaults = [
+          ("QUAK", "Quackington Holdings Ltd.",        1200.0, 0.0, 200.0, 1.5),
+          ("BRDD", "Breadsworth & Associates",          850.0, 0.0, 150.0, 1.5),
+          ("WDPL", "Waddle & Paddle Financial Corp",   1800.0, 0.0, 300.0, 2.0),
+          ("SQWK", "Squawksworth Ventures Inc.",        320.0, 0.0,  80.0, 1.0),
+          ("DKPT", "Duckpoint Capital Partners",        2500.0, 0.0, 400.0, 2.0),
+          ("MLFT", "Molted Feather Industries Inc.",    450.0, 0.0, 100.0, 2.0),
+          ("FWNG", "Fowington Group International",    3200.0, 0.0, 500.0, 2.0),
+          ("PRPT", "Preenington Proprietary Ltd.",      680.0, 0.0, 120.0, 1.5),
+          ("NSTG", "Nestington Global Securities",     1100.0, 0.0, 180.0, 1.5),
+          ("BLLP", "Billington & Lakesworth Partners",  500.0, 0.0, 100.0, 2.0),
+      ]
+      for ticker, name, price, min_c, max_c, interval in defaults:
+          await db.execute(
+              """INSERT OR IGNORE INTO stocks (ticker, name, price, base_price, min_change, max_change, fluctuation_minutes)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)""",
+              (ticker, name, price, price, min_c, max_c, interval),
+          )
+          await db.execute(
+              "INSERT INTO price_history (ticker, price) VALUES (?, ?)",
+              (ticker, price),
+          )
+      await db.commit()
+      return True
+  
