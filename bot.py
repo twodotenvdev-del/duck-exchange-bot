@@ -1132,20 +1132,20 @@ async def prefix_globaldep(ctx, amount: float = None):
 
 # ── /loan ─────────────────────────────────────────────────────────────────
 
-@bot.tree.command(name="loan", description="Borrow cash from the bank (25% interest, due in 24h).")
-@app_commands.describe(amount="Amount to borrow — max is your current bank balance")
-async def loan_cmd(interaction: discord.Interaction, amount: float):
+@bot.tree.command(name="loan", description="Borrow cash from the bank (25% interest, due in 20 min).")
+@app_commands.describe(amount="How much to borrow")
+@app_commands.choices(amount=[
+    app_commands.Choice(name="$100", value=100),
+    app_commands.Choice(name="$1,000", value=1000),
+    app_commands.Choice(name="$10,000", value=10000),
+    app_commands.Choice(name="$100,000", value=100000),
+])
+async def loan_cmd(interaction: discord.Interaction, amount: int):
       await ensure(interaction)
       result = await db.take_loan(str(interaction.user.id), amount)
       if result.get("error") == "has_loan":
           await interaction.response.send_message(
               f"\u274c You already have a loan of **{fmt_money(result['owed'])}** outstanding. Use `/payloan` to repay it.",
-              ephemeral=True,
-          )
-          return
-      if result.get("error") == "exceeds_limit":
-          await interaction.response.send_message(
-              f"\u274c Max borrow is your bank balance (**{fmt_money(result['max'])}**).",
               ephemeral=True,
           )
           return
