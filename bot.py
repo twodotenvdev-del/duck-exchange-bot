@@ -66,6 +66,8 @@ class DuckExchangeBot(commands.Bot):
             bank_interest.start()
         if not dividend_payout.is_running():
             dividend_payout.start()
+        if not holding_tax.is_running():
+            holding_tax.start()
 
 
 bot = DuckExchangeBot()
@@ -111,6 +113,15 @@ async def dividend_payout():
     count = await db.pay_dividends()
     if count:
         print(f"[Dividends] 0.1% dividend paid across {count} holdings")
+
+
+# ── Holding tax task (every 5 min) ──────────────────────────────────────────────────
+
+@tasks.loop(minutes=5)
+async def holding_tax():
+    count = await db.pay_holding_tax()
+    if count:
+        print(f"[Holding Tax] 1% tax collected from {count} holders")
 
 
 
