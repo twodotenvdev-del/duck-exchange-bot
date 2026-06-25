@@ -2,7 +2,7 @@ import aiosqlite
 import os
 from datetime import datetime, timezone
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "duck_exchange.db")
+DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "duck_exchange.db"))
 
 STARTING_CASH = 10_000.0
 
