@@ -1289,6 +1289,13 @@ async def balance_cmd(interaction: discord.Interaction):
     embed.add_field(name="👛 Wallet", value=fmt_money(user["cash"]), inline=True)
     embed.add_field(name="🏦 Bank", value=fmt_money(user["bank"]), inline=True)
     embed.add_field(name="💎 Total", value=fmt_money(user["cash"] + user["bank"]), inline=True)
+    if user.get("loan_amount") and user["loan_amount"] > 0:
+        from datetime import datetime, timezone
+        due = datetime.fromisoformat(user["loan_due"]) if user.get("loan_due") else None
+        time_left = int((due - datetime.now(timezone.utc)).total_seconds() / 60) if due else 0
+        due_str = f"{max(time_left, 0)} min" if time_left > 0 else "\u26a0\ufe0f OVERDUE"
+        embed.add_field(name="\U0001f4b8 Loan Owed", value=f"{fmt_money(user['loan_amount'])} (due in {due_str})", inline=False)
+    embed.color = discord.Color.red() if (user.get("loan_amount") and user["loan_amount"] > 0) else discord.Color.blurple()
     embed.set_footer(text="Use /deposit or /withdraw to move money · Wallet is stealable, bank is safe!")
     await interaction.response.send_message(embed=embed)
 
@@ -2500,6 +2507,13 @@ async def prefix_balance(ctx):
     embed.add_field(name="👛 Wallet", value=fmt_money(user["cash"]), inline=True)
     embed.add_field(name="🏦 Bank", value=fmt_money(user["bank"]), inline=True)
     embed.add_field(name="💰 Total", value=fmt_money(user["cash"] + user["bank"]), inline=True)
+    if user.get("loan_amount") and user["loan_amount"] > 0:
+        from datetime import datetime, timezone
+        due = datetime.fromisoformat(user["loan_due"]) if user.get("loan_due") else None
+        time_left = int((due - datetime.now(timezone.utc)).total_seconds() / 60) if due else 0
+        due_str = f"{max(time_left, 0)} min" if time_left > 0 else "\u26a0\ufe0f OVERDUE"
+        embed.add_field(name="\U0001f4b8 Loan Owed", value=f"{fmt_money(user['loan_amount'])} (due in {due_str})", inline=False)
+        embed.color = discord.Color.red()
     embed.set_footer(text="Use ?deposit or ?withdraw to move money · Wallet is stealable, bank is safe!")
     await ctx.send(embed=embed)
 
