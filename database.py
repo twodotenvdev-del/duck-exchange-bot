@@ -1234,3 +1234,25 @@ async def global_dep(amount: float) -> int:
           await db.commit()
           return count
   
+
+
+  async def collect_overdue_loans() -> list[dict]:
+      """Auto-collect overdue loans. Deducts from wallet (can go negative). Returns list of collected."""
+      from datetime import datetime, timezone
+      now = datetime.now(timezone.utc).isoformat()
+      async with aiosqlite.connect(DB_PATH) as db:
+          db.row_factory = aiosqlite.Row
+          async with db.execute(
+              "SELECT user_id, username, loan_amount FROM users WHERE loan_amount > 0 AND loan_due <= ?", (now,)
+          ) as cur:
+              overdue = await cur.fetchall()
+          collected = []
+          for row in overdue:
+              await db.execute(
+                  "UPDATE users SET cash = cash - ?, loan_amount = 0, loan_due = NULL WHERE user_id = ?",
+                  (row["loan_amount"], row["user_id"]),
+              )
+              collected.append({"user_id": row["user_id"], "username": row["username"], "amount": row["loan_amount"]})
+          await db.commit()
+          return collected
+  
