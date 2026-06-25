@@ -1,0 +1,13 @@
+services:
+    bot:
+      build: .
+      restart: unless-stopped
+      environment:
+        - DISCORD_TOKEN=${DISCORD_TOKEN}
+        - DB_PATH=/data/duck_exchange.db
+      volumes:
+        - bot_data:/data
+
+  volumes:
+    bot_data:
+  
