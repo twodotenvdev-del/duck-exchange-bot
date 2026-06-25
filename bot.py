@@ -144,6 +144,10 @@ async def ensure(interaction: discord.Interaction):
     await db.ensure_user(str(interaction.user.id), interaction.user.display_name)
 
 
+async def ensure_prefix(ctx):
+    await db.ensure_user(str(ctx.author.id), ctx.author.display_name)
+
+
 def render_chart_image(prices: list[float], ticker: str, name: str, shareholders: int = 0, base_price: float = 0.0) -> io.BytesIO:
     """Render a candlestick-style chart image and return it as a BytesIO PNG."""
     BG      = "#0d1b2a"
@@ -215,7 +219,7 @@ def render_chart_image(prices: list[float], ticker: str, name: str, shareholders
     pct = (overall / prices[0] * 100) if prices[0] != 0 else 0
     arrow = "▲" if overall >= 0 else "▼"
     change_color = GREEN if overall >= 0 else RED
-    holder_str = f"   ·   👥 {shareholders:,} shareholder{'s' if shareholders != 1 else ''}"
+    holder_str = f"   ·   {shareholders:,} holder{'s' if shareholders != 1 else ''}"
 
     plt.tight_layout(rect=[0, 0, 1, 0.83])
 
@@ -381,10 +385,11 @@ async def buy_cmd(interaction: discord.Interaction, ticker: str, amount: int):
     result = await db.buy_stock(str(interaction.user.id), ticker, amount, stock["price"])
     if result == "too_many_shares":
         holdings = await db.get_user_holdings(str(interaction.user.id))
-        owned = sum(h["shares"] for h in holdings)
+        owned = sum(h["shares"] for h in holdings if h["ticker"] == ticker)
+        cap = stock["max_shares"]
         await interaction.followup.send(
-            f"❌ You can only own **30 total shares**.\n"
-            f"You currently own: **{owned}/30**\nTrying to buy: **{amount}**"
+            f"❌ **{ticker}** has a total supply of **{cap:,} shares** and they're all accounted for.\n"
+            f"You own: **{owned:,}/{cap:,}**  ·  Trying to buy: **{amount:,}**"
         )
         return
     if result == "insufficient_funds":
@@ -542,6 +547,7 @@ async def marketsummary_cmd(interaction: discord.Interaction):
     min_change="Min change magnitude per fluctuation (default 0)",
     max_change="Max change magnitude per fluctuation (default 300)",
     fluctuation_minutes="How often this stock fluctuates in minutes (default 1)",
+    max_shares="Total shares that can ever exist (default 50)",
 )
 async def createstock_cmd(
     interaction: discord.Interaction,
@@ -551,6 +557,7 @@ async def createstock_cmd(
     min_change: float = 0.0,
     max_change: float = 300.0,
     fluctuation_minutes: int = 1,
+    max_shares: int = 50,
 ):
     if not is_admin(interaction):
         await interaction.response.send_message("❌ Only server administrators can create stocks.", ephemeral=True)
@@ -567,8 +574,11 @@ async def createstock_cmd(
     if fluctuation_minutes < 1:
         await interaction.response.send_message("❌ Fluctuation interval must be at least 1 minute.", ephemeral=True)
         return
+    if max_shares < 1:
+        await interaction.response.send_message("❌ max_shares must be at least 1.", ephemeral=True)
+        return
     ticker = ticker.upper()
-    success = await db.create_stock(ticker, name, starting_price, min_change, max_change, fluctuation_minutes)
+    success = await db.create_stock(ticker, name, starting_price, min_change, max_change, fluctuation_minutes, max_shares)
     if not success:
         await interaction.response.send_message(
             f"❌ A stock with ticker **{ticker}** already exists.", ephemeral=True
@@ -581,7 +591,8 @@ async def createstock_cmd(
             f"**{ticker}** — {name}\n"
             f"**Starting price:** {fmt_money(starting_price)}\n"
             f"**Change range:** ${min_change:,.0f}–${max_change:,.0f}\n"
-            f"**Fluctuates every:** {fluctuation_minutes} min"
+            f"**Fluctuates every:** {fluctuation_minutes} min\n"
+            f"**Total supply:** {max_shares:,} shares"
         ),
     )
     await interaction.response.send_message(embed=embed)
@@ -2734,8 +2745,9 @@ async def prefix_buy(ctx, ticker: str = "", amount_str: str = ""):
     result = await db.buy_stock(str(ctx.author.id), ticker, amount, stock["price"])
     if result == "too_many_shares":
         holdings = await db.get_user_holdings(str(ctx.author.id))
-        owned = sum(h["shares"] for h in holdings)
-        await ctx.send(f"❌ You can only own **30 total shares**.\nYou own: **{owned}/30**  ·  Trying to buy: **{amount}**")
+        owned = sum(h["shares"] for h in holdings if h["ticker"] == ticker)
+        cap = stock["max_shares"]
+        await ctx.send(f"❌ **{ticker}** supply cap is **{cap:,}** shares — none left to buy.\nYou own: **{owned:,}/{cap:,}**  ·  Trying to buy: **{amount:,}**")
         return
     if result == "insufficient_funds":
         fee_pct = await db.get_bot_setting("transaction_fee_pct", "2")
