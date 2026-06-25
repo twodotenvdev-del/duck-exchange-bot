@@ -62,6 +62,10 @@ class DuckExchangeBot(commands.Bot):
         print(f"Duck Exchange is online as {self.user} (ID: {self.user.id})")
         if not stock_fluctuation.is_running():
             stock_fluctuation.start()
+        if not bank_interest.is_running():
+            bank_interest.start()
+        if not dividend_payout.is_running():
+            dividend_payout.start()
 
 
 bot = DuckExchangeBot()
@@ -89,6 +93,26 @@ async def stock_fluctuation():
             crashes = sum(1 for r in changed if r.get("crashed"))
             print(f"[Fluctuation] {len(changed)}/{len(results)} stocks moved, {crashes} crash(es)")
 
+
+
+  # ── Bank interest task (every 2 min) ──────────────────────────────────────
+
+  @tasks.loop(minutes=2)
+  async def bank_interest():
+      count = await db.pay_bank_interest()
+      if count:
+          print(f"[Interest] 1% bank interest paid to {count} users")
+
+
+  # ── Dividend payout task (every 30 min) ───────────────────────────────────
+
+  @tasks.loop(minutes=30)
+  async def dividend_payout():
+      count = await db.pay_dividends()
+      if count:
+          print(f"[Dividends] 0.1% dividend paid across {count} holdings")
+
+  
 
 def is_admin(interaction: discord.Interaction) -> bool:
     if interaction.guild is None:
@@ -1069,6 +1093,171 @@ async def prefix_globaldep(ctx, amount: float = None):
     await ctx.send(embed=embed)
 
 
+
+  # ── /loan ─────────────────────────────────────────────────────────────────
+
+  @bot.tree.command(name="loan", description="Borrow cash from the bank (25% interest, due in 24h).")
+  @app_commands.describe(amount="Amount to borrow — max is your current bank balance")
+  async def loan_cmd(interaction: discord.Interaction, amount: float):
+      await ensure(interaction)
+      result = await db.take_loan(str(interaction.user.id), amount)
+      if result.get("error") == "has_loan":
+          await interaction.response.send_message(
+              f"\u274c You already have a loan of **{fmt_money(result['owed'])}** outstanding. Use `/payloan` to repay it.",
+              ephemeral=True,
+          )
+          return
+      if result.get("error") == "exceeds_limit":
+          await interaction.response.send_message(
+              f"\u274c Max borrow is your bank balance (**{fmt_money(result['max'])}**).",
+              ephemeral=True,
+          )
+          return
+      if result.get("error") in ("invalid_amount", "user_not_found"):
+          await interaction.response.send_message("\u274c Invalid request.", ephemeral=True)
+          return
+      from datetime import datetime
+      due_str = datetime.fromisoformat(result["due"]).strftime("%Y-%m-%d %H:%M UTC")
+      embed = discord.Embed(
+          title="\U0001f3e6 Loan Approved",
+          color=discord.Color.green(),
+          description=(
+              f"Borrowed **{fmt_money(result['borrowed'])}** \u2192 wallet.\n"
+              f"You owe **{fmt_money(result['owed'])}** (25% interest).\n"
+              f"Due: `{due_str}`\n\n"
+              f"\U0001f45b New wallet: **{fmt_money(result['new_cash'])}**"
+          ),
+      )
+      await interaction.response.send_message(embed=embed)
+
+
+  # ── /payloan ───────────────────────────────────────────────────────────────
+
+  @bot.tree.command(name="payloan", description="Repay part or all of your outstanding loan.")
+  @app_commands.describe(amount="Amount to repay from your wallet")
+  async def payloan_cmd(interaction: discord.Interaction, amount: float):
+      await ensure(interaction)
+      result = await db.repay_loan(str(interaction.user.id), amount)
+      if result.get("error") == "no_loan":
+          await interaction.response.send_message("\u274c You have no outstanding loan.", ephemeral=True)
+          return
+      if result.get("error") == "insufficient_funds":
+          await interaction.response.send_message(
+              f"\u274c You only have **{fmt_money(result['has'])}** in your wallet.", ephemeral=True
+          )
+          return
+      paid_off = result["remaining"] <= 0
+      embed = discord.Embed(
+          title="\U0001f4b3 Loan Repayment",
+          color=discord.Color.green() if paid_off else discord.Color.orange(),
+          description=(
+              f"Paid **{fmt_money(result['paid'])}** toward your loan.\n"
+              + ("\u2705 Loan fully repaid!" if paid_off else f"Remaining: **{fmt_money(result['remaining'])}**")
+              + f"\n\n\U0001f45b New wallet: **{fmt_money(result['new_cash'])}**"
+          ),
+      )
+      await interaction.response.send_message(embed=embed)
+
+
+  # ── ?loan / ?payloan ───────────────────────────────────────────────────────
+
+  @bot.command(name="loan")
+  async def prefix_loan(ctx, amount: float = None):
+      if amount is None:
+          await ctx.send("\u274c Usage: `?loan <amount>`", delete_after=8)
+          return
+      await ensure_prefix(ctx)
+      result = await db.take_loan(str(ctx.author.id), amount)
+      if result.get("error") == "has_loan":
+          await ctx.send(f"\u274c Already have a loan of **{fmt_money(result['owed'])}**. Use `?payloan <amount>` to repay.")
+          return
+      if result.get("error") == "exceeds_limit":
+          await ctx.send(f"\u274c Max borrow is your bank balance (**{fmt_money(result['max'])}**).")
+          return
+      if result.get("error") in ("invalid_amount", "user_not_found"):
+          await ctx.send("\u274c Invalid request.")
+          return
+      from datetime import datetime
+      due_str = datetime.fromisoformat(result["due"]).strftime("%Y-%m-%d %H:%M UTC")
+      embed = discord.Embed(
+          title="\U0001f3e6 Loan Approved",
+          color=discord.Color.green(),
+          description=(
+              f"Borrowed **{fmt_money(result['borrowed'])}** \u2192 wallet.\n"
+              f"You owe **{fmt_money(result['owed'])}** (25% interest).\n"
+              f"Due: `{due_str}`\n\n"
+              f"\U0001f45b New wallet: **{fmt_money(result['new_cash'])}**"
+          ),
+      )
+      await ctx.send(embed=embed)
+
+
+  @bot.command(name="payloan", aliases=["pl", "repay"])
+  async def prefix_payloan(ctx, amount: float = None):
+      if amount is None:
+          await ctx.send("\u274c Usage: `?payloan <amount>`", delete_after=8)
+          return
+      await ensure_prefix(ctx)
+      result = await db.repay_loan(str(ctx.author.id), amount)
+      if result.get("error") == "no_loan":
+          await ctx.send("\u274c You have no outstanding loan.")
+          return
+      if result.get("error") == "insufficient_funds":
+          await ctx.send(f"\u274c You only have **{fmt_money(result['has'])}** in wallet.")
+          return
+      paid_off = result["remaining"] <= 0
+      embed = discord.Embed(
+          title="\U0001f4b3 Loan Repayment",
+          color=discord.Color.green() if paid_off else discord.Color.orange(),
+          description=(
+              f"Paid **{fmt_money(result['paid'])}** toward your loan.\n"
+              + ("\u2705 Loan fully repaid!" if paid_off else f"Remaining: **{fmt_money(result['remaining'])}**")
+              + f"\n\n\U0001f45b New wallet: **{fmt_money(result['new_cash'])}**"
+          ),
+      )
+      await ctx.send(embed=embed)
+
+
+  # ── /announce ─────────────────────────────────────────────────────────────
+
+  @bot.tree.command(name="announce", description="[Admin] Post an announcement embed to any channel.")
+  @app_commands.describe(channel="Channel to post in", message="Announcement text")
+  async def announce_cmd(interaction: discord.Interaction, channel: discord.TextChannel, message: str):
+      if not is_admin(interaction):
+          await interaction.response.send_message("\u274c Admins only.", ephemeral=True)
+          return
+      embed = discord.Embed(
+          title="\U0001f4e2 Announcement",
+          description=message,
+          color=discord.Color.gold(),
+      )
+      embed.set_footer(text=f"Posted by {interaction.user.display_name}")
+      await channel.send(embed=embed)
+      await interaction.response.send_message(f"\u2705 Posted to {channel.mention}", ephemeral=True)
+
+
+  @bot.command(name="announce")
+  async def prefix_announce(ctx, channel: discord.TextChannel = None, *, message: str = ""):
+      if not ctx.guild or not ctx.author.guild_permissions.administrator:
+          await ctx.send("\u274c Admins only.", delete_after=8)
+          return
+      if not channel or not message:
+          await ctx.send("\u274c Usage: `?announce #channel Your message here`", delete_after=8)
+          return
+      embed = discord.Embed(
+          title="\U0001f4e2 Announcement",
+          description=message,
+          color=discord.Color.gold(),
+      )
+      embed.set_footer(text=f"Posted by {ctx.author.display_name}")
+      await channel.send(embed=embed)
+      try:
+          await ctx.message.delete()
+      except Exception:
+          pass
+
+
+  
 @bot.tree.command(name="balance", description="Check your wallet and bank balance.")
 async def balance_cmd(interaction: discord.Interaction):
     await ensure(interaction)
