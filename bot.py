@@ -187,7 +187,7 @@ def render_chart_image(prices: list[float], ticker: str, name: str, shareholders
         )
         ax.add_patch(rect)
 
-    ax.set_xlim(-0.5, max(len(prices), 1) - 0.5)
+    ax.set_xlim(-0.5, MAX_SLOTS - 0.5)
 
     # Always keep base_price visible in y-axis
     y_min = min(prices) - price_range * 0.05
@@ -211,21 +211,26 @@ def render_chart_image(prices: list[float], ticker: str, name: str, shareholders
         spine.set_edgecolor(GRID)
     ax.tick_params(colors=TEXT, labelsize=8.5)
 
-    ax.set_title(f"{ticker}  —  {name}", color=TEXT, fontsize=13, fontweight="bold", pad=10)
-
     overall = prices[-1] - prices[0]
     pct = (overall / prices[0] * 100) if prices[0] != 0 else 0
     arrow = "▲" if overall >= 0 else "▼"
     change_color = GREEN if overall >= 0 else RED
-
     holder_str = f"   ·   👥 {shareholders:,} shareholder{'s' if shareholders != 1 else ''}"
+
+    plt.tight_layout(rect=[0, 0, 1, 0.83])
+
+    # Line 1: ticker — full name  (white, top)
     fig.text(
-        0.5, 0.912,
+        0.5, 0.935,
+        f"{ticker}  —  {name}",
+        ha="center", fontsize=12, fontweight="bold", color=TEXT,
+    )
+    # Line 2: price + change + shareholders  (green/red, below name)
+    fig.text(
+        0.5, 0.865,
         f"${prices[-1]:,.2f}   {arrow} ${abs(overall):,.2f} ({pct:+.1f}%){holder_str}",
         ha="center", fontsize=9, color=change_color,
     )
-
-    plt.tight_layout(rect=[0, 0, 1, 0.905])
 
     buf = io.BytesIO()
     plt.savefig(buf, format="png", dpi=140, facecolor=BG)
