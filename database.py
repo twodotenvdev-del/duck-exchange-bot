@@ -1144,8 +1144,6 @@ async def take_loan(user_id: str, amount: float) -> dict:
             return {"error": "has_loan", "owed": user["loan_amount"]}
         if amount <= 0:
             return {"error": "invalid_amount"}
-        if amount > user["bank"]:
-            return {"error": "exceeds_limit", "max": user["bank"]}
         owed = round(amount * 1.25, 2)
         due = (datetime.now(timezone.utc) + timedelta(minutes=20)).isoformat()
         await db.execute(
