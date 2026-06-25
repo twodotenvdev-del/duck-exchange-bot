@@ -182,7 +182,8 @@ async def get_user(user_id: str):
         async with db.execute(
             "SELECT * FROM users WHERE user_id = ?", (user_id,)
         ) as cursor:
-            return await cursor.fetchone()
+            row = await cursor.fetchone()
+            return dict(row) if row else None
 
 
 # ── Stocks ─────────────────────────────────────────────────────────────────────
