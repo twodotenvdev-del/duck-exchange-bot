@@ -251,13 +251,19 @@ async def stocks_cmd(interaction: discord.Interaction):
         await interaction.followup.send("No stocks have been created yet. An admin can use `/createstock` to add one.")
         return
 
+    supply = await db.get_all_stocks_supply()
     embed = discord.Embed(
         title="🦆 Duck Exchange — Stock Market",
         color=discord.Color.yellow(),
     )
     lines = []
     for row in rows:
-        lines.append(f"**{row['ticker']}** — {row['name']} — {fmt_money(row['price'])}")
+        s = supply.get(row["ticker"], {"held": 0, "max": 50})
+        remaining = s["max"] - s["held"]
+        lines.append(
+            f"**{row['ticker']}** — {row['name']} — {fmt_money(row['price'])}"
+            f"  `{remaining:,}/{s['max']:,} shares left`"
+        )
     embed.description = "\n".join(lines)
     embed.set_footer(text="Use /buy <stock> <amount> to invest!")
     await interaction.followup.send(embed=embed)
@@ -301,6 +307,10 @@ async def stock_cmd(interaction: discord.Interaction, ticker: str):
     else:
         change_str = "No history"
 
+    shares_held = await db.get_shares_held(ticker)
+    max_s = stock["max_shares"] if stock["max_shares"] else 50
+    remaining = max_s - shares_held
+
     embed = discord.Embed(
         title=f"📊 {ticker} — {stock['name']}",
         color=discord.Color.yellow(),
@@ -311,6 +321,7 @@ async def stock_cmd(interaction: discord.Interaction, ticker: str):
     embed.add_field(name="🛡️ Price Floor", value=fmt_money(floor), inline=True)
     embed.add_field(name="👥 Shareholders", value=str(len(owners)), inline=True)
     embed.add_field(name="📉 Trend", value=trend, inline=True)
+    embed.add_field(name="📦 Supply", value=f"{remaining:,}/{max_s:,} shares left", inline=True)
     embed.add_field(
         name="⚙️ Volatility",
         value=f"Change range: ${stock['min_change']:,.0f}–${stock['max_change']:,.0f}\nInterval: every **{stock['fluctuation_minutes']}** min",
@@ -2484,6 +2495,15 @@ async def quick_create_stock(ctx, *, args: str = ""):
     await ctx.send(embed=embed)
 
 
+@bot.command(name="sync")
+async def prefix_sync(ctx):
+    """[Admin] Force-sync slash commands with Discord so new params appear immediately."""
+    if not ctx.guild or not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Only server administrators can use this command.", delete_after=8)
+        return
+    msg = await ctx.send("🔄 Syncing slash commands with Discord...")
+    synced = await bot.tree.sync()
+    await msg.edit(content=f"✅ Synced **{len(synced)}** slash commands with Discord. New params should appear now.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2695,6 +2715,10 @@ async def prefix_stock(ctx, ticker: str = ""):
         ("🟡 +$0.00" if c == 0 else ("🟢 +" + fmt_money(c) if c > 0 else "🔴 " + fmt_money(c)))
         for c in changes
     ) if changes else "No history"
+    shares_held = await db.get_shares_held(ticker)
+    max_s = stock["max_shares"] if stock["max_shares"] else 50
+    remaining = max_s - shares_held
+
     embed = discord.Embed(title=f"📊 {ticker} — {stock['name']}", color=discord.Color.yellow())
     embed.add_field(name="💵 Current Price", value=fmt_money(stock["price"]), inline=True)
     embed.add_field(name="🏁 Base Price", value=fmt_money(base_p), inline=True)
@@ -2702,6 +2726,7 @@ async def prefix_stock(ctx, ticker: str = ""):
     embed.add_field(name="🛡️ Price Floor", value=fmt_money(floor), inline=True)
     embed.add_field(name="👥 Shareholders", value=str(len(owners)), inline=True)
     embed.add_field(name="📉 Trend", value=trend, inline=True)
+    embed.add_field(name="📦 Supply", value=f"{remaining:,}/{max_s:,} shares left", inline=True)
     embed.add_field(
         name="⚙️ Volatility",
         value=f"Change range: ${stock['min_change']:,.0f}–${stock['max_change']:,.0f}\nInterval: every **{stock['fluctuation_minutes']}** min",
