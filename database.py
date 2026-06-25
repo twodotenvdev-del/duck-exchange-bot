@@ -1185,16 +1185,16 @@ async def global_dep(amount: float) -> int:
       if count > 0:
           return False
       defaults = [
-        ("QUAK", "Quackington Holdings Ltd.",        15000.0, 0.0, 1500.0, 1.5),
-        ("BRDD", "Breadsworth & Associates",          16500.0, 0.0, 1500.0, 1.5),
-        ("WDPL", "Waddle & Paddle Financial Corp",   18000.0, 0.0, 2000.0, 2.0),
-        ("SQWK", "Squawksworth Ventures Inc.",        15500.0, 0.0, 1500.0, 1.0),
-        ("DKPT", "Duckpoint Capital Partners",        20000.0, 0.0, 2000.0, 2.0),
-        ("MLFT", "Molted Feather Industries Inc.",    16000.0, 0.0, 1500.0, 2.0),
-        ("FWNG", "Fowington Group International",    19500.0, 0.0, 2000.0, 2.0),
-        ("PRPT", "Preenington Proprietary Ltd.",      17000.0, 0.0, 1500.0, 1.5),
-        ("NSTG", "Nestington Global Securities",     18500.0, 0.0, 2000.0, 1.5),
-        ("BLLP", "Billington & Lakesworth Partners",  15000.0, 0.0, 1500.0, 2.0),
+        ("SQWK", "Squawksworth Ventures Inc.",        1500.0,  0.0,  200.0, 1.0),
+        ("MLFT", "Molted Feather Industries Inc.",    3000.0,  0.0,  350.0, 2.0),
+        ("BLLP", "Billington & Lakesworth Partners",  5000.0,  0.0,  550.0, 2.0),
+        ("BRDD", "Breadsworth & Associates",          7000.0,  0.0,  750.0, 1.5),
+        ("PRPT", "Preenington Proprietary Ltd.",      9000.0,  0.0,  950.0, 1.5),
+        ("QUAK", "Quackington Holdings Ltd.",        11000.0,  0.0, 1100.0, 1.5),
+        ("NSTG", "Nestington Global Securities",     13000.0,  0.0, 1300.0, 1.5),
+        ("WDPL", "Waddle & Paddle Financial Corp",   15500.0,  0.0, 1500.0, 2.0),
+        ("DKPT", "Duckpoint Capital Partners",       18000.0,  0.0, 1800.0, 2.0),
+        ("FWNG", "Fowington Group International",    20000.0,  0.0, 2000.0, 2.0),
       ]
       for ticker, name, price, min_c, max_c, interval in defaults:
           await db.execute(
