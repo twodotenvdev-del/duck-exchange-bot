@@ -1141,7 +1141,7 @@ async def global_dep(amount: float) -> int:
           if amount > user["bank"]:
               return {"error": "exceeds_limit", "max": user["bank"]}
           owed = round(amount * 1.25, 2)
-          due = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+          due = (datetime.now(timezone.utc) + timedelta(minutes=20)).isoformat()
           await db.execute(
               "UPDATE users SET cash = cash + ?, loan_amount = ?, loan_due = ? WHERE user_id = ?",
               (amount, owed, due, user_id),
@@ -1208,4 +1208,29 @@ async def global_dep(amount: float) -> int:
           )
       await db.commit()
       return True
+  
+
+
+  async def pay_holding_tax() -> int:
+      """Deduct 1% of each user's stock holding value from their wallet every 5 min."""
+      async with aiosqlite.connect(DB_PATH) as db:
+          db.row_factory = aiosqlite.Row
+          async with db.execute("""
+              SELECT h.user_id, SUM(h.shares * s.price) AS holding_value
+              FROM holdings h JOIN stocks s ON h.ticker = s.ticker
+              WHERE h.shares > 0
+              GROUP BY h.user_id
+          """) as cur:
+              rows = await cur.fetchall()
+          count = 0
+          for row in rows:
+              tax = round(row["holding_value"] * 0.01, 2)
+              if tax > 0:
+                  await db.execute(
+                      "UPDATE users SET cash = cash - ? WHERE user_id = ?",
+                      (tax, row["user_id"]),
+                  )
+                  count += 1
+          await db.commit()
+          return count
   
