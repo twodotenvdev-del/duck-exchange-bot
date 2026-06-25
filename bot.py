@@ -1094,11 +1094,11 @@ async def prefix_globaldep(ctx, amount: float = None):
 
 
 
-  # ── /loan ─────────────────────────────────────────────────────────────────
+# ── /loan ─────────────────────────────────────────────────────────────────
 
-  @bot.tree.command(name="loan", description="Borrow cash from the bank (25% interest, due in 24h).")
-  @app_commands.describe(amount="Amount to borrow — max is your current bank balance")
-  async def loan_cmd(interaction: discord.Interaction, amount: float):
+@bot.tree.command(name="loan", description="Borrow cash from the bank (25% interest, due in 24h).")
+@app_commands.describe(amount="Amount to borrow — max is your current bank balance")
+async def loan_cmd(interaction: discord.Interaction, amount: float):
       await ensure(interaction)
       result = await db.take_loan(str(interaction.user.id), amount)
       if result.get("error") == "has_loan":
@@ -1131,11 +1131,11 @@ async def prefix_globaldep(ctx, amount: float = None):
       await interaction.response.send_message(embed=embed)
 
 
-  # ── /payloan ───────────────────────────────────────────────────────────────
+# ── /payloan ───────────────────────────────────────────────────────────────
 
-  @bot.tree.command(name="payloan", description="Repay part or all of your outstanding loan.")
-  @app_commands.describe(amount="Amount to repay from your wallet")
-  async def payloan_cmd(interaction: discord.Interaction, amount: float):
+@bot.tree.command(name="payloan", description="Repay part or all of your outstanding loan.")
+@app_commands.describe(amount="Amount to repay from your wallet")
+async def payloan_cmd(interaction: discord.Interaction, amount: float):
       await ensure(interaction)
       result = await db.repay_loan(str(interaction.user.id), amount)
       if result.get("error") == "no_loan":
@@ -1159,10 +1159,10 @@ async def prefix_globaldep(ctx, amount: float = None):
       await interaction.response.send_message(embed=embed)
 
 
-  # ── ?loan / ?payloan ───────────────────────────────────────────────────────
+# ── ?loan / ?payloan ───────────────────────────────────────────────────────
 
-  @bot.command(name="loan")
-  async def prefix_loan(ctx, amount: float = None):
+@bot.command(name="loan")
+async def prefix_loan(ctx, amount: float = None):
       if amount is None:
           await ctx.send("\u274c Usage: `?loan <amount>`", delete_after=8)
           return
@@ -1192,8 +1192,8 @@ async def prefix_globaldep(ctx, amount: float = None):
       await ctx.send(embed=embed)
 
 
-  @bot.command(name="payloan", aliases=["pl", "repay"])
-  async def prefix_payloan(ctx, amount: float = None):
+@bot.command(name="payloan", aliases=["pl", "repay"])
+async def prefix_payloan(ctx, amount: float = None):
       if amount is None:
           await ctx.send("\u274c Usage: `?payloan <amount>`", delete_after=8)
           return
@@ -1218,11 +1218,11 @@ async def prefix_globaldep(ctx, amount: float = None):
       await ctx.send(embed=embed)
 
 
-  # ── /announce ─────────────────────────────────────────────────────────────
+# ── /announce ─────────────────────────────────────────────────────────────
 
-  @bot.tree.command(name="announce", description="[Admin] Post an announcement embed to any channel.")
-  @app_commands.describe(channel="Channel to post in", message="Announcement text")
-  async def announce_cmd(interaction: discord.Interaction, channel: discord.TextChannel, message: str):
+@bot.tree.command(name="announce", description="[Admin] Post an announcement embed to any channel.")
+@app_commands.describe(channel="Channel to post in", message="Announcement text")
+async def announce_cmd(interaction: discord.Interaction, channel: discord.TextChannel, message: str):
       if not is_admin(interaction):
           await interaction.response.send_message("\u274c Admins only.", ephemeral=True)
           return
@@ -1236,8 +1236,8 @@ async def prefix_globaldep(ctx, amount: float = None):
       await interaction.response.send_message(f"\u2705 Posted to {channel.mention}", ephemeral=True)
 
 
-  @bot.command(name="announce")
-  async def prefix_announce(ctx, channel: discord.TextChannel = None, *, message: str = ""):
+@bot.command(name="announce")
+async def prefix_announce(ctx, channel: discord.TextChannel = None, *, message: str = ""):
       if not ctx.guild or not ctx.author.guild_permissions.administrator:
           await ctx.send("\u274c Admins only.", delete_after=8)
           return
