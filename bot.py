@@ -95,24 +95,24 @@ async def stock_fluctuation():
 
 
 
-  # ── Bank interest task (every 2 min) ──────────────────────────────────────
+# ── Bank interest task (every 2 min) ──────────────────────────────────────
 
-  @tasks.loop(minutes=2)
-  async def bank_interest():
-      count = await db.pay_bank_interest()
-      if count:
-          print(f"[Interest] 1% bank interest paid to {count} users")
+@tasks.loop(minutes=2)
+async def bank_interest():
+    count = await db.pay_bank_interest()
+    if count:
+        print(f"[Interest] 1% bank interest paid to {count} users")
 
 
-  # ── Dividend payout task (every 30 min) ───────────────────────────────────
+# ── Dividend payout task (every 30 min) ───────────────────────────────────
 
-  @tasks.loop(minutes=30)
-  async def dividend_payout():
-      count = await db.pay_dividends()
-      if count:
-          print(f"[Dividends] 0.1% dividend paid across {count} holdings")
+@tasks.loop(minutes=30)
+async def dividend_payout():
+    count = await db.pay_dividends()
+    if count:
+        print(f"[Dividends] 0.1% dividend paid across {count} holdings")
 
-  
+
 
 def is_admin(interaction: discord.Interaction) -> bool:
     if interaction.guild is None:
