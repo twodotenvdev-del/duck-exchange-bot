@@ -828,6 +828,38 @@ async def get_owners_of_stock(ticker: str):
             return await cursor.fetchall()
 
 
+async def get_shares_held(ticker: str) -> int:
+    """Total shares currently held by all users for a given ticker."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT COALESCE(SUM(shares), 0) AS total FROM holdings WHERE ticker = ?",
+            (ticker.upper(),),
+        ) as cur:
+            row = await cur.fetchone()
+        return int(row["total"]) if row else 0
+
+
+async def get_all_stocks_supply() -> dict:
+    """Returns {ticker: {held, max}} for every stock in one query."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """
+            SELECT s.ticker, s.max_shares,
+                   COALESCE(SUM(h.shares), 0) AS shares_held
+            FROM stocks s
+            LEFT JOIN holdings h ON h.ticker = s.ticker
+            GROUP BY s.ticker
+            """
+        ) as cur:
+            rows = await cur.fetchall()
+        return {
+            row["ticker"]: {"held": int(row["shares_held"]), "max": row["max_shares"]}
+            for row in rows
+        }
+
+
 # ── Admin Shop ─────────────────────────────────────────────────────────────────
 
 async def create_shop_item(
