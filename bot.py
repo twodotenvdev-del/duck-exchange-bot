@@ -259,7 +259,7 @@ def _stocks_lines(rows) -> list[str]:
             trend = "📉 Down"
         else:
             trend = "➡️ Flat"
-        if row.get("crashed"):
+        if row["crashed"] if "crashed" in row.keys() else False:
             trend = "💥 CRASHED"
             price_str = fmt_money(price) + "  ⚠️ *frozen*"
         else:
