@@ -136,7 +136,7 @@ async def init_db():
         tier1_tickers = "('SQWK','MLFT','BLLP','BRDD','PRPT')"
         tier2_tickers = "('QUAK','NSTG')"
         tier3_tickers = "('WDPL','DKPT')"
-        tier4_tickers = "('FWNG',)"
+        tier4_tickers = "('FWNG')"
         await db.execute(
             f"UPDATE stocks SET min_change=0.0, max_change=500.0, fluctuation_minutes=4.0, max_shares=50"
             f" WHERE ticker IN {tier1_tickers}"
