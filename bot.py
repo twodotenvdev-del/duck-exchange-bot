@@ -62,8 +62,6 @@ class DuckExchangeBot(commands.Bot):
         print(f"Duck Exchange is online as {self.user} (ID: {self.user.id})")
         if not stock_fluctuation.is_running():
             stock_fluctuation.start()
-        if not bank_interest.is_running():
-            bank_interest.start()
         if not dividend_payout.is_running():
             dividend_payout.start()
         if not holding_tax.is_running():
@@ -99,13 +97,7 @@ async def stock_fluctuation():
 
 
 
-# ── Bank interest task (every 2 min) ──────────────────────────────────────
-
-@tasks.loop(minutes=2)
-async def bank_interest():
-    count = await db.pay_bank_interest()
-    if count:
-        print(f"[Interest] 1% bank interest paid to {count} users")
+# ── Bank interest — REMOVED (was too OP at +2% every 2 min) ──────────────
 
 
 # ── Dividend payout task (every 30 min) ───────────────────────────────────
@@ -159,18 +151,36 @@ def render_chart_image(prices: list[float], ticker: str, name: str, shareholders
     YELLOW  = "#f1c40f"
     GRAY    = "#888888"
 
-    price_range = max(prices) - min(prices) if max(prices) != min(prices) else prices[0] * 0.1
+    price_range = max(prices) - min(prices) if max(prices) != min(prices) else max(prices[0] * 0.1, 1.0)
 
     MAX_SLOTS = 40
+
+    # Pre-compute y axis limits so we can set a sensible min bar height
+    y_min = min(prices) - price_range * 0.05
+    y_max = max(prices) + price_range * 0.1
+    if base_price > 0:
+        y_min = min(y_min, base_price - price_range * 0.02)
+        y_max = max(y_max, base_price + price_range * 0.02)
+    y_span = y_max - y_min if y_max > y_min else max(prices[0] * 0.1, 1.0)
+    # Minimum visible bar height — at least 1.2% of the y-axis span or 0.1% of the price
+    MIN_BAR_H = max(y_span * 0.012, prices[-1] * 0.001)
+
+    # Scale bar x-positions to always fill the full chart width
+    n = len(prices)
+    if n > 1:
+        x_scale = (MAX_SLOTS - 1) / (n - 1)
+    else:
+        x_scale = 1.0
+    body_width = max(x_scale * 0.85, 0.4)
+
     fig, ax = plt.subplots(figsize=(14, 4))
     fig.patch.set_facecolor(BG)
     ax.set_facecolor(BG)
 
-    body_width = 0.95
-
     for i, price in enumerate(prices):
+        x = i * x_scale
         if i == 0:
-            half = max(price_range * 0.015, price * 0.005)
+            half = max(price_range * 0.015, price * 0.005, MIN_BAR_H / 2)
             body_lo, body_hi = price - half, price + half
             color = NEUTRAL
         else:
@@ -184,21 +194,14 @@ def render_chart_image(prices: list[float], ticker: str, name: str, shareholders
             else:
                 color = YELLOW  # no change = yellow
 
-        body_h = max(body_hi - body_lo, price_range * 0.004)
+        body_h = max(body_hi - body_lo, MIN_BAR_H)
         rect = mpatches.FancyBboxPatch(
-            (i - body_width / 2, body_lo), body_width, body_h,
+            (x - body_width / 2, body_lo), body_width, body_h,
             boxstyle="square,pad=0", linewidth=0, facecolor=color, zorder=3,
         )
         ax.add_patch(rect)
 
     ax.set_xlim(-0.5, MAX_SLOTS - 0.5)
-
-    # Always keep base_price visible in y-axis
-    y_min = min(prices) - price_range * 0.05
-    y_max = max(prices) + price_range * 0.1
-    if base_price > 0:
-        y_min = min(y_min, base_price - price_range * 0.02)
-        y_max = max(y_max, base_price + price_range * 0.02)
     ax.set_ylim(y_min, y_max)
 
     # Base price reference line
@@ -243,6 +246,31 @@ def render_chart_image(prices: list[float], ticker: str, name: str, shareholders
     return buf
 
 
+def _stocks_lines(rows) -> list[str]:
+    """Build the standardised stock listing lines for ?stocks / /stocks."""
+    lines = []
+    for row in rows:
+        base_p = row["base_price"] if row["base_price"] > 0 else row["price"]
+        price  = row["price"]
+        ratio  = price / base_p if base_p > 0 else 1.0
+        if ratio > 1.02:
+            trend = "📈 Up"
+        elif ratio < 0.98:
+            trend = "📉 Down"
+        else:
+            trend = "➡️ Flat"
+        if row.get("crashed"):
+            trend = "💥 CRASHED"
+            price_str = fmt_money(price) + "  ⚠️ *frozen*"
+        else:
+            price_str = fmt_money(price)
+        lines.append(
+            f"*{row['ticker']}* **{row['name']}** — {price_str}\n"
+            f"• BASE = {fmt_money(base_p)} | TREND = {trend}"
+        )
+    return lines
+
+
 @bot.tree.command(name="stocks", description="View all available stocks and their current prices.")
 async def stocks_cmd(interaction: discord.Interaction):
     await interaction.response.defer()
@@ -251,21 +279,13 @@ async def stocks_cmd(interaction: discord.Interaction):
         await interaction.followup.send("No stocks have been created yet. An admin can use `/createstock` to add one.")
         return
 
-    supply = await db.get_all_stocks_supply()
+    lines = _stocks_lines(rows)
     embed = discord.Embed(
         title="🦆 Duck Exchange — Stock Market",
         color=discord.Color.yellow(),
+        description="\n\n".join(lines),
     )
-    lines = []
-    for row in rows:
-        s = supply.get(row["ticker"], {"held": 0, "max": 50})
-        remaining = s["max"] - s["held"]
-        lines.append(
-            f"**{row['ticker']}** — {row['name']} — {fmt_money(row['price'])}"
-            f"  `{remaining:,}/{s['max']:,} shares left`"
-        )
-    embed.description = "\n".join(lines)
-    embed.set_footer(text="Use /buy <stock> <amount> to invest!")
+    embed.set_footer(text="Use /buy <TICKER> <amount> to invest  ·  Max 10 shares per stock per player")
     await interaction.followup.send(embed=embed)
 
 
@@ -394,6 +414,17 @@ async def buy_cmd(interaction: discord.Interaction, ticker: str, amount: int):
         return
     cost = amount * stock["price"]
     result = await db.buy_stock(str(interaction.user.id), ticker, amount, stock["price"])
+    if result == "stock_crashed":
+        await interaction.followup.send(f"❌ **{ticker}** has crashed and is frozen — trading is suspended.")
+        return
+    if result == "per_player_limit":
+        holding = await db.get_holding(str(interaction.user.id), ticker)
+        owned = holding["shares"] if holding else 0
+        await interaction.followup.send(
+            f"❌ You can only hold **{db.PER_PLAYER_SHARE_LIMIT}** shares of **{ticker}** at a time.\n"
+            f"You currently own: **{owned:,}**"
+        )
+        return
     if result == "too_many_shares":
         holdings = await db.get_user_holdings(str(interaction.user.id))
         owned = sum(h["shares"] for h in holdings if h["ticker"] == ticker)
@@ -2679,10 +2710,13 @@ async def prefix_stocks(ctx):
     if not rows:
         await ctx.send("No stocks created yet. An admin can use `?cs` to add one.")
         return
-    embed = discord.Embed(title="🦆 Duck Exchange — Stock Market", color=discord.Color.yellow())
-    lines = [f"**{r['ticker']}** — {r['name']} — {fmt_money(r['price'])}" for r in rows]
-    embed.description = "\n".join(lines)
-    embed.set_footer(text="Use ?buy <ticker> <amount> to invest!")
+    lines = _stocks_lines(rows)
+    embed = discord.Embed(
+        title="🦆 Duck Exchange — Stock Market",
+        color=discord.Color.yellow(),
+        description="\n\n".join(lines),
+    )
+    embed.set_footer(text="Use ?buy <TICKER> <amount> to invest  ·  Max 10 shares per stock per player")
     await ctx.send(embed=embed)
 
 
@@ -2753,9 +2787,12 @@ async def prefix_buy(ctx, ticker: str = "", amount_str: str = ""):
     if amount_str.lower() == "all":
         fee_pct_val = float(await db.get_bot_setting("transaction_fee_pct", "2"))
         user = await db.get_user(str(ctx.author.id))
-        max_shares = int(user["cash"] / (stock["price"] * (1 + fee_pct_val / 100)))
+        max_shares_by_cash = int(user["cash"] / (stock["price"] * (1 + fee_pct_val / 100)))
+        holding = await db.get_holding(str(ctx.author.id), ticker)
+        already_owned = holding["shares"] if holding else 0
+        max_shares = min(max_shares_by_cash, db.PER_PLAYER_SHARE_LIMIT - already_owned)
         if max_shares <= 0:
-            await ctx.send(f"❌ You don't have enough cash to buy any shares of **{ticker}**.")
+            await ctx.send(f"❌ You don't have enough cash to buy any shares of **{ticker}**, or you've hit the 10-share limit.")
             return
         amount = max_shares
     else:
@@ -2768,6 +2805,17 @@ async def prefix_buy(ctx, ticker: str = "", amount_str: str = ""):
         await ctx.send("❌ Amount must be at least 1.")
         return
     result = await db.buy_stock(str(ctx.author.id), ticker, amount, stock["price"])
+    if result == "stock_crashed":
+        await ctx.send(f"❌ **{ticker}** has crashed and is frozen — trading is suspended.")
+        return
+    if result == "per_player_limit":
+        holding = await db.get_holding(str(ctx.author.id), ticker)
+        owned = holding["shares"] if holding else 0
+        await ctx.send(
+            f"❌ You can only hold **{db.PER_PLAYER_SHARE_LIMIT}** shares of **{ticker}** at a time.\n"
+            f"You currently own: **{owned:,}**"
+        )
+        return
     if result == "too_many_shares":
         holdings = await db.get_user_holdings(str(ctx.author.id))
         owned = sum(h["shares"] for h in holdings if h["ticker"] == ticker)
@@ -3261,6 +3309,54 @@ async def prefix_inventory(ctx):
             lines.append(f"{source_icon} **{it['item_name']}**{desc}")
         embed.description = "\n".join(lines)
         embed.set_footer(text=f"{len(items)} item(s)  ·  🛒 = admin shop  ·  🏪 = market")
+    await ctx.send(embed=embed)
+
+
+# ── ?crash / ?uncrash (admin only) ───────────────────────────────────────────
+
+@bot.command(name="crash")
+async def prefix_crash(ctx, ticker: str = ""):
+    """Admin: crash a stock — price → $0.01, trading frozen."""
+    if not ctx.guild or not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Only server administrators can use this command.", delete_after=8)
+        return
+    if not ticker:
+        await ctx.send("Usage: `?crash <TICKER>`")
+        return
+    ticker = ticker.upper()
+    ok = await db.crash_stock(ticker)
+    if not ok:
+        await ctx.send(f"❌ No stock **{ticker}** found.")
+        return
+    embed = discord.Embed(
+        title="💥 Stock Crashed",
+        description=f"**{ticker}** has been crashed.\nPrice set to **$0.01** — trading is suspended.\nUse `?uncrash {ticker}` to restore it.",
+        color=discord.Color.red(),
+    )
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="uncrash")
+async def prefix_uncrash(ctx, ticker: str = ""):
+    """Admin: restore a crashed stock — price reset to base, trading unfrozen."""
+    if not ctx.guild or not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Only server administrators can use this command.", delete_after=8)
+        return
+    if not ticker:
+        await ctx.send("Usage: `?uncrash <TICKER>`")
+        return
+    ticker = ticker.upper()
+    ok = await db.uncrash_stock(ticker)
+    if not ok:
+        await ctx.send(f"❌ No stock **{ticker}** found.")
+        return
+    stock = await db.get_stock(ticker)
+    restore_price = stock["price"] if stock else 0
+    embed = discord.Embed(
+        title="🔄 Stock Restored",
+        description=f"**{ticker}** has been un-crashed.\nPrice restored to **{fmt_money(restore_price)}** — trading is now open.",
+        color=discord.Color.green(),
+    )
     await ctx.send(embed=embed)
 
 
