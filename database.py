@@ -122,6 +122,7 @@ async def init_db():
             "ALTER TABLE stocks ADD COLUMN max_shares INTEGER NOT NULL DEFAULT 50",
             "ALTER TABLE users ADD COLUMN loan_amount REAL NOT NULL DEFAULT 0.0",
             "ALTER TABLE users ADD COLUMN loan_due TEXT DEFAULT NULL",
+            "ALTER TABLE stocks ADD COLUMN crashed INTEGER NOT NULL DEFAULT 0",
         ]
         for stmt in migrations:
             try:
@@ -130,6 +131,61 @@ async def init_db():
                 pass
         # Fix base_price for existing stocks that have 0 base_price (set = current price)
         await db.execute("UPDATE stocks SET base_price = price WHERE base_price = 0.0")
+
+        # ── Migrate existing stocks to new tier config ──────────────────────────
+        tier1_tickers = "('SQWK','MLFT','BLLP','BRDD','PRPT')"
+        tier2_tickers = "('QUAK','NSTG')"
+        tier3_tickers = "('WDPL','DKPT')"
+        tier4_tickers = "('FWNG',)"
+        await db.execute(
+            f"UPDATE stocks SET min_change=0.0, max_change=500.0, fluctuation_minutes=4.0, max_shares=50"
+            f" WHERE ticker IN {tier1_tickers}"
+        )
+        await db.execute(
+            f"UPDATE stocks SET min_change=0.0, max_change=750.0, fluctuation_minutes=4.0, max_shares=35"
+            f" WHERE ticker IN {tier2_tickers}"
+        )
+        await db.execute(
+            f"UPDATE stocks SET min_change=0.0, max_change=1000.0, fluctuation_minutes=4.0, max_shares=20"
+            f" WHERE ticker IN {tier3_tickers}"
+        )
+        await db.execute(
+            f"UPDATE stocks SET min_change=0.0, max_change=2000.0, fluctuation_minutes=5.0, max_shares=5"
+            f" WHERE ticker IN {tier4_tickers}"
+        )
+
+        # ── Insert new stocks (if not already present) ─────────────────────────
+        new_stocks = [
+            # Tier 1 — $2,500 | 4 min | 0-500 | 50 shares
+            ("FETR", "Featherington Trading Ltd.",      2500.0, 0.0,  500.0, 4.0, 50),
+            ("PDLE", "Paddle Cove Industries Corp.",    2500.0, 0.0,  500.0, 4.0, 50),
+            ("MRSH", "Marshfield Duck Securities",      2500.0, 0.0,  500.0, 4.0, 50),
+            ("POND", "Pondsworth Asset Group",          2500.0, 0.0,  500.0, 4.0, 50),
+            ("DRKE", "Drakefield Enterprises Inc.",     2500.0, 0.0,  500.0, 4.0, 50),
+            # Tier 2 — $10,000 | 4 min | 0-750 | 35 shares
+            ("TEAL", "Tealworth Capital Group",        10000.0, 0.0,  750.0, 4.0, 35),
+            ("GSLG", "Goose & Larsen Financial Ltd.",  10000.0, 0.0,  750.0, 4.0, 35),
+            ("WNGR", "Winger Investment Partners",     10000.0, 0.0,  750.0, 4.0, 35),
+            # Tier 3 — $15,000 | 4 min | 0-1,000 | 20 shares
+            ("PLMG", "Plumage International Ltd.",     15000.0, 0.0, 1000.0, 4.0, 20),
+            # Tier 4 — $30,000 | 5 min | 0-2,000 | 5 shares
+            ("MDRD", "Mallard & Ducros Holdings",      30000.0, 0.0, 2000.0, 5.0,  5),
+        ]
+        for ticker, name, price, min_c, max_c, interval, max_s in new_stocks:
+            try:
+                await db.execute(
+                    """INSERT OR IGNORE INTO stocks
+                       (ticker, name, price, base_price, min_change, max_change, fluctuation_minutes, max_shares, crashed)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)""",
+                    (ticker, name, price, price, min_c, max_c, interval, max_s),
+                )
+                await db.execute(
+                    "INSERT INTO price_history (ticker, price) VALUES (?, ?)",
+                    (ticker, price),
+                )
+            except Exception:
+                pass
+
         await db.commit()
         await _seed_default_stocks(db)
 
@@ -310,8 +366,11 @@ PRICE_IMPACT_BUY  = 15.0   # price increase per share bought
 PRICE_IMPACT_SELL = 20.0   # price decrease per share sold
 
 
+PER_PLAYER_SHARE_LIMIT = 10  # max shares any player can hold in a single stock
+
+
 async def buy_stock(user_id: str, ticker: str, shares: int, price: float):
-    """Returns 'insufficient_funds', 'too_many_shares', 'user_not_found', or (new_price, fee)."""
+    """Returns 'insufficient_funds', 'too_many_shares', 'per_player_limit', 'stock_crashed', 'user_not_found', or (new_price, fee)."""
     fee_pct = float(await get_bot_setting("transaction_fee_pct", "2")) / 100.0
     base_cost = shares * price
     fee = round(base_cost * fee_pct, 2)
@@ -319,18 +378,35 @@ async def buy_stock(user_id: str, ticker: str, shares: int, price: float):
 
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        # Check if stock is crashed
+        async with db.execute(
+            "SELECT crashed, max_shares FROM stocks WHERE ticker = ?", (ticker.upper(),)
+        ) as cursor:
+            slimit = await cursor.fetchone()
+        if not slimit:
+            return "user_not_found"
+        if slimit["crashed"]:
+            return "stock_crashed"
+        max_s = slimit["max_shares"] if slimit else 50
+
+        # Check total market supply
         async with db.execute(
             "SELECT COALESCE(SUM(shares), 0) AS total_shares FROM holdings WHERE ticker = ?",
             (ticker.upper(),),
         ) as cursor:
             total = await cursor.fetchone()
-        async with db.execute(
-            "SELECT max_shares FROM stocks WHERE ticker = ?", (ticker.upper(),)
-        ) as cursor:
-            slimit = await cursor.fetchone()
-        max_s = slimit["max_shares"] if slimit else 50
         if total["total_shares"] + shares > max_s:
             return "too_many_shares"
+
+        # Check per-player share limit
+        async with db.execute(
+            "SELECT COALESCE(shares, 0) AS owned FROM holdings WHERE user_id = ? AND ticker = ?",
+            (user_id, ticker.upper()),
+        ) as cursor:
+            player_row = await cursor.fetchone()
+        player_owned = player_row["owned"] if player_row else 0
+        if player_owned + shares > PER_PLAYER_SHARE_LIMIT:
+            return "per_player_limit"
     price_delta = shares * PRICE_IMPACT_BUY
     new_price = round(price + price_delta, 2)
 
@@ -692,12 +768,16 @@ async def fluctuate_all_stocks() -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as db_conn:
         db_conn.row_factory = aiosqlite.Row
         async with db_conn.execute(
-            "SELECT ticker, price, base_price, min_change, max_change, fluctuation_minutes, last_fluctuated FROM stocks"
+            "SELECT ticker, price, base_price, min_change, max_change, fluctuation_minutes, last_fluctuated, crashed FROM stocks"
         ) as cur:
             stocks = await cur.fetchall()
 
         results = []
         for stock in stocks:
+            # Skip crashed stocks — they are frozen
+            if stock["crashed"]:
+                continue
+
             # Check per-stock interval
             interval = stock["fluctuation_minutes"]
             if stock["last_fluctuated"]:
@@ -715,9 +795,10 @@ async def fluctuate_all_stocks() -> list[dict]:
             if magnitude <= 0:
                 change = 0.0
             else:
+                # More realistic weights — 65% chance of no move each tick
                 category = _r.choices(
                     ["zero", "small", "medium", "large", "xlarge"],
-                    weights=[50, 20, 15, 10, 5],
+                    weights=[65, 18, 10, 5, 2],
                 )[0]
                 if category == "zero":
                     change = 0.0
@@ -731,21 +812,29 @@ async def fluctuate_all_stocks() -> list[dict]:
                     }
                     lo = band_starts[category]
                     hi = lo + quarter
-                    direction = _r.choices([1, -1], weights=[60, 40])[0]
+
+                    # Mean-reversion: if price is far above base, lean down; far below, lean up
+                    ratio = old_price / base_p if base_p > 0 else 1.0
+                    if ratio > 1.5:
+                        up_w, dn_w = 35, 65
+                    elif ratio > 1.2:
+                        up_w, dn_w = 45, 55
+                    elif ratio < 0.7:
+                        up_w, dn_w = 65, 35
+                    elif ratio < 0.85:
+                        up_w, dn_w = 55, 45
+                    else:
+                        up_w, dn_w = 50, 50
+
+                    direction = _r.choices([1, -1], weights=[up_w, dn_w])[0]
                     change = round(_r.uniform(lo, hi) * direction, 2)
 
-            # ── Penny-stock skyrocket ─────────────────────────────────────
-            # Stocks under $500: 12% chance to rocket up 40–150% this tick
-            if old_price < 500 and change != 0 and _r.random() < 0.12:
-                change = min(round(old_price * _r.uniform(0.40, 1.50), 2), max_c * 2)
-
-            # ── Market risks ──────────────────────────────────────────────
-            # 5% chance of a sudden crash (25-55% drop) — punishes AFK holding
-            crashed = False
-            if _r.random() < 0.01:
-                crash_pct = _r.uniform(0.10, 0.25)
+            # ── Market risk — rare mini-crash (0.1% per tick) ──────────────
+            mini_crashed = False
+            if _r.random() < 0.001:
+                crash_pct = _r.uniform(0.08, 0.20)
                 change = -round(old_price * crash_pct, 2)
-                crashed = True
+                mini_crashed = True
 
 
 
@@ -768,10 +857,51 @@ async def fluctuate_all_stocks() -> list[dict]:
                 "old": old_price,
                 "new": new_price,
                 "change": actual_change,
-                "crashed": crashed,
+                "crashed": mini_crashed,
             })
         await db_conn.commit()
     return results
+
+
+async def crash_stock(ticker: str) -> bool:
+    """Crash a stock: set price to $0.01, freeze movement and buying."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT ticker FROM stocks WHERE ticker = ?", (ticker.upper(),)) as cur:
+            if not await cur.fetchone():
+                return False
+        await db.execute(
+            "UPDATE stocks SET crashed = 1, price = 0.01 WHERE ticker = ?",
+            (ticker.upper(),),
+        )
+        await db.execute(
+            "INSERT INTO price_history (ticker, price) VALUES (?, 0.01)",
+            (ticker.upper(),),
+        )
+        await db.commit()
+    return True
+
+
+async def uncrash_stock(ticker: str) -> bool:
+    """Restore a crashed stock: unfreeze movement and reset price to base_price."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT base_price FROM stocks WHERE ticker = ?", (ticker.upper(),)
+        ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return False
+        restore_price = row["base_price"] if row["base_price"] > 0 else 2500.0
+        await db.execute(
+            "UPDATE stocks SET crashed = 0, price = ? WHERE ticker = ?",
+            (restore_price, ticker.upper()),
+        )
+        await db.execute(
+            "INSERT INTO price_history (ticker, price) VALUES (?, ?)",
+            (ticker.upper(), restore_price),
+        )
+        await db.commit()
+    return True
 
 
 async def get_recent_price_changes(ticker: str, count: int = 5) -> list[float]:
@@ -1220,23 +1350,39 @@ async def _seed_default_stocks(db) -> bool:
         count = (await cur.fetchone())[0]
     if count > 0:
         return False
+    # ticker, name, price, min_change, max_change, interval_min, max_shares
     defaults = [
-      ("SQWK", "Squawksworth Ventures Inc.",        1500.0,  0.0,  200.0, 1.0),
-      ("MLFT", "Molted Feather Industries Inc.",    3000.0,  0.0,  350.0, 2.0),
-      ("BLLP", "Billington & Lakesworth Partners",  5000.0,  0.0,  550.0, 2.0),
-      ("BRDD", "Breadsworth & Associates",          7000.0,  0.0,  750.0, 1.5),
-      ("PRPT", "Preenington Proprietary Ltd.",      9000.0,  0.0,  950.0, 1.5),
-      ("QUAK", "Quackington Holdings Ltd.",        11000.0,  0.0, 1100.0, 1.5),
-      ("NSTG", "Nestington Global Securities",     13000.0,  0.0, 1300.0, 1.5),
-      ("WDPL", "Waddle & Paddle Financial Corp",   15500.0,  0.0, 1500.0, 2.0),
-      ("DKPT", "Duckpoint Capital Partners",       18000.0,  0.0, 1800.0, 2.0),
-      ("FWNG", "Fowington Group International",    20000.0,  0.0, 2000.0, 2.0),
+        # Tier 1 — $2,500 | 4 min | 0-500 | 50 shares
+        ("SQWK", "Squawksworth Ventures Inc.",       2500.0, 0.0,  500.0, 4.0, 50),
+        ("MLFT", "Molted Feather Industries Inc.",   2500.0, 0.0,  500.0, 4.0, 50),
+        ("BLLP", "Billington & Lakesworth Partners", 2500.0, 0.0,  500.0, 4.0, 50),
+        ("BRDD", "Breadsworth & Associates",         2500.0, 0.0,  500.0, 4.0, 50),
+        ("PRPT", "Preenington Proprietary Ltd.",     2500.0, 0.0,  500.0, 4.0, 50),
+        ("FETR", "Featherington Trading Ltd.",       2500.0, 0.0,  500.0, 4.0, 50),
+        ("PDLE", "Paddle Cove Industries Corp.",     2500.0, 0.0,  500.0, 4.0, 50),
+        ("MRSH", "Marshfield Duck Securities",       2500.0, 0.0,  500.0, 4.0, 50),
+        ("POND", "Pondsworth Asset Group",           2500.0, 0.0,  500.0, 4.0, 50),
+        ("DRKE", "Drakefield Enterprises Inc.",      2500.0, 0.0,  500.0, 4.0, 50),
+        # Tier 2 — $10,000 | 4 min | 0-750 | 35 shares
+        ("QUAK", "Quackington Holdings Ltd.",       10000.0, 0.0,  750.0, 4.0, 35),
+        ("NSTG", "Nestington Global Securities",    10000.0, 0.0,  750.0, 4.0, 35),
+        ("TEAL", "Tealworth Capital Group",         10000.0, 0.0,  750.0, 4.0, 35),
+        ("GSLG", "Goose & Larsen Financial Ltd.",   10000.0, 0.0,  750.0, 4.0, 35),
+        ("WNGR", "Winger Investment Partners",      10000.0, 0.0,  750.0, 4.0, 35),
+        # Tier 3 — $15,000 | 4 min | 0-1,000 | 20 shares
+        ("WDPL", "Waddle & Paddle Financial Corp",  15000.0, 0.0, 1000.0, 4.0, 20),
+        ("DKPT", "Duckpoint Capital Partners",      15000.0, 0.0, 1000.0, 4.0, 20),
+        ("PLMG", "Plumage International Ltd.",      15000.0, 0.0, 1000.0, 4.0, 20),
+        # Tier 4 — $30,000 | 5 min | 0-2,000 | 5 shares
+        ("FWNG", "Fowington Group International",   30000.0, 0.0, 2000.0, 5.0,  5),
+        ("MDRD", "Mallard & Ducros Holdings",       30000.0, 0.0, 2000.0, 5.0,  5),
     ]
-    for ticker, name, price, min_c, max_c, interval in defaults:
+    for ticker, name, price, min_c, max_c, interval, max_s in defaults:
         await db.execute(
-            """INSERT OR IGNORE INTO stocks (ticker, name, price, base_price, min_change, max_change, fluctuation_minutes, max_shares)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (ticker, name, price, price, min_c, max_c, interval, 50),
+            """INSERT OR IGNORE INTO stocks
+               (ticker, name, price, base_price, min_change, max_change, fluctuation_minutes, max_shares, crashed)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)""",
+            (ticker, name, price, price, min_c, max_c, interval, max_s),
         )
         await db.execute(
             "INSERT INTO price_history (ticker, price) VALUES (?, ?)",
